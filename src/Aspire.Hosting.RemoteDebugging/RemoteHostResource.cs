@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using Aspire.Hosting.ApplicationModel;
 
-namespace Aspire.Hosting.RemoteDebuggging;
+namespace Aspire.Hosting.RemoteDebugging;
 
 public sealed class RemoteHostResource(string name)
   : Resource(name), IResourceWithEnvironment, IResourceWithEndpoints, IResourceWithWaitSupport, IComputeResource

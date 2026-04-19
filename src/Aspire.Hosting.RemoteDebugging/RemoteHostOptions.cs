@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using Aspire.Hosting.ApplicationModel;
 
-namespace Aspire.Hosting.RemoteDebuggging;
+namespace Aspire.Hosting.RemoteDebugging;
 
 public sealed class RemoteHostOptions
 {
@@ -24,8 +24,8 @@ public sealed class RemoteHostOptions
 
   public void SetPort(int port)
   {
-    ArgumentOutOfRangeException.ThrowIfLessThan(0, port);
-    ArgumentOutOfRangeException.ThrowIfGreaterThan(65536, port);
+    ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(port, 0, nameof(port));
+    ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65535, nameof(port));
     Port = port;
   }
 

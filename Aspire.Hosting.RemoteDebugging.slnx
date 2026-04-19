@@ -3,6 +3,6 @@
     <Project Path="samples/Sample.AppHost/Sample.AppHost.csproj" />
   </Folder>
   <Folder Name="/src/">
-    <Project Path="src/Aspire.Hosting.RemoteDebuggging/Aspire.Hosting.RemoteDebuggging.csproj" />
+    <Project Path="src/Aspire.Hosting.RemoteDebugging/Aspire.Hosting.RemoteDebugging.csproj" />
   </Folder>
 </Solution>

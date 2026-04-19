@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Aspire.Hosting.RemoteDebuggging\Aspire.Hosting.RemoteDebuggging.csproj" IsAspireProjectResource="false" />
+    <ProjectReference Include="..\..\src\Aspire.Hosting.RemoteDebugging\Aspire.Hosting.RemoteDebugging.csproj" IsAspireProjectResource="false" />
   </ItemGroup>
 
 </Project>

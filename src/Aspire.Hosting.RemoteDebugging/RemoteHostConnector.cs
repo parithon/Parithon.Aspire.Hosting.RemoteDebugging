@@ -1,9 +1,7 @@
-using System.Diagnostics;
-using System.Net;
 using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.Logging;
 
-namespace Aspire.Hosting.RemoteDebuggging;
+namespace Aspire.Hosting.RemoteDebugging;
 
 internal static class RemoteHostConnector
 {
@@ -19,31 +17,54 @@ internal static class RemoteHostConnector
 
     try
     {
-      var dns = resource.DnsParameter is not null
-        ? await resource.DnsParameter.Resource.GetValueAsync(cancellationToken)
-        : resource.Dns;
-
-      if (logger.IsEnabled(LogLevel.Trace))
+      // Dispose any stale transport from a previous connect attempt before creating a new one.
+      if (resource.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var existing) && existing is not null)
       {
-        logger.LogTrace("Resolving the DNS host name for {Dns}", dns);
+        existing.Dispose();
+        resource.Annotations.Remove(existing);
       }
 
-      var addresses = await Dns.GetHostAddressesAsync(dns ?? resource.Name, cancellationToken) 
-        ?? throw new UnreachableException("Could not determine host address.");
-
-      // TODO: attempt to establish a connection.
-      if (logger.IsEnabled(LogLevel.Information))
-      {
-        logger.LogInformation("Establishing a connection to {Dns} using {IPAddress}", dns, addresses);
-      }
       IRemoteHostTransport transport = resource.TransportType switch
       {
         TransportType.SSH => new SshTransport(),
-        _ => throw new NotSupportedException()
+        _ => throw new NotSupportedException($"Transport type '{resource.TransportType}' is not supported.")
       };
-      await transport.ConnectAsync(resource, logger, cancellationToken);
 
+      if (logger.IsEnabled(LogLevel.Information))
+      {
+        logger.LogInformation("Establishing a {TransportType} connection to {Resource}", resource.TransportType, resource.Name);
+      }
+
+      await transport.ConnectAsync(resource, logger, cancellationToken).ConfigureAwait(false);
       resource.Annotations.Add(new RemoteHostTransportAnnotation(transport));
+
+      await notifications.PublishUpdateAsync(resource, s => s with
+      {
+        State = KnownRemoteResourceStates.InstallRemoteDebuggerSnapshot
+      }).ConfigureAwait(false);
+      
+      var vsdbResult = await transport.InstallRemoteDebugger(logger, cancellationToken);
+
+      if (!vsdbResult.IsInstalled)
+      {
+        await notifications.PublishUpdateAsync(resource, s => s with
+        {
+          State = KnownRemoteResourceStates.FailedToInitializeSnapshot,
+          StopTimeStamp = DateTime.UtcNow
+        }).ConfigureAwait(false);
+        return;
+      }
+
+      var started = await transport.StartRemoteDebugger(logger, cancellationToken);
+      if (!started)
+      {
+        await notifications.PublishUpdateAsync(resource, s => s with
+        {
+          State = new ResourceStateSnapshot(KnownResourceStates.Exited, KnownResourceStateStyles.Error),
+          StopTimeStamp = DateTime.UtcNow
+        }).ConfigureAwait(false);
+        return;
+      }
 
       await notifications.PublishUpdateAsync(resource, s => s with
       {
@@ -57,7 +78,7 @@ internal static class RemoteHostConnector
       await notifications.PublishUpdateAsync(resource, s => s with
       {
         State = KnownRemoteResourceStates.FailedToConnectSnapshot
-      });
+      }).ConfigureAwait(false);
     }
   }
 
@@ -74,7 +95,7 @@ internal static class RemoteHostConnector
     {
       if (resource.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var annotation) && annotation is not null)
       {
-        await annotation.Transport.DisconnectAsync(resource, logger, cancellationToken);
+        await annotation.Transport.DisconnectAsync(logger, cancellationToken).ConfigureAwait(false);
         annotation.Dispose();
         resource.Annotations.Remove(annotation);
       }

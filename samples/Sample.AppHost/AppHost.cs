@@ -1,5 +1,5 @@
 using System.Runtime.InteropServices;
-using Aspire.Hosting.RemoteDebuggging;
+using Aspire.Hosting.RemoteDebugging;
 
 var builder = DistributedApplication.CreateBuilder(args);
 

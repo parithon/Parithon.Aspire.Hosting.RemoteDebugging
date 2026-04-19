@@ -3,7 +3,7 @@ using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Lifecycle;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Aspire.Hosting.RemoteDebuggging;
+namespace Aspire.Hosting.RemoteDebugging;
 
 public static class RemoteHostResourceExtensions
 {
@@ -31,11 +31,6 @@ public static class RemoteHostResourceExtensions
     var options = new RemoteHostOptions();
     configure(options);
 
-    if (options == default)
-    {
-      throw new ArgumentException("A platform must be provided via options.Platform.", nameof(configure));
-    }
-
     if (options.Platform != OSPlatform.Windows && options.Platform != OSPlatform.Linux)
     {
       throw new PlatformNotSupportedException("Only Windows and Linux are supported platforms.");
@@ -50,6 +45,7 @@ public static class RemoteHostResourceExtensions
     {
       Platform = options.Platform,
       Credential = options.Credential,
+      TransportType = options.TransportType ?? TransportType.SSH,
       Dns = options.Dns ?? name,
       DnsParameter = options.DnsParameter,
       Port = options.Port,
@@ -73,6 +69,8 @@ public static class RemoteHostResourceExtensions
       resource.WithReferenceRelationship(options.PortParameter);
     }
 
+    var platformAnnotation = new RemoteHostOSPlatformAnnotation(options.Platform);
+
     return resource
       .WithInitialState(new CustomResourceSnapshot
       {
@@ -81,6 +79,7 @@ public static class RemoteHostResourceExtensions
         CreationTimeStamp = DateTime.UtcNow,
         Properties = []
       })
+      .WithAnnotation(platformAnnotation)
       .WithCommand(name: "connect", displayName: "Connect", executeCommand: async context =>
       {
         var notifications = context.ServiceProvider.GetRequiredService<ResourceNotificationService>();
@@ -158,6 +157,8 @@ public static class RemoteHostResourceExtensions
     builder.Resource.TransportType = TransportType.SSH;
     builder.Resource.Port = 22;
 
+    builder.WithReferenceRelationship(dns);
+
     return builder;
   }
 
@@ -173,7 +174,7 @@ public static class RemoteHostResourceExtensions
     ArgumentNullException.ThrowIfNull(builder);
     ArgumentNullException.ThrowIfNull(dns);
     ArgumentOutOfRangeException.ThrowIfEqual(port, 0, nameof(port));
-    ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65536, nameof(port));
+    ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65535, nameof(port));
 
     builder.Resource.Dns = dns;
     builder.Resource.Port = port;
@@ -192,8 +193,8 @@ public static class RemoteHostResourceExtensions
   {
     ArgumentNullException.ThrowIfNull(builder);
     ArgumentNullException.ThrowIfNull(dns);
-    ArgumentOutOfRangeException.ThrowIfLessThan(0, port);
-    ArgumentOutOfRangeException.ThrowIfGreaterThan(65536, port);
+    ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(port, 0, nameof(port));
+    ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65535, nameof(port));
 
     builder.Resource.DnsParameter = dns;
     builder.Resource.Port = port;
