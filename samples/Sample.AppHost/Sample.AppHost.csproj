@@ -1,0 +1,15 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.2.2">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UserSecretsId>cf1f84d3-6d13-4681-b351-bd9e61dd4001</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Aspire.Hosting.RemoteDebuggging\Aspire.Hosting.RemoteDebuggging.csproj" IsAspireProjectResource="false" />
+  </ItemGroup>
+
+</Project>
