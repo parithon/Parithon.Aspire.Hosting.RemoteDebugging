@@ -55,7 +55,9 @@ public static class RemoteHostResourceExtensions
       Dns = options.Dns ?? name,
       DnsParameter = options.DnsParameter,
       Port = options.Port,
-      PortParameter = options.PortParameter
+      PortParameter = options.PortParameter,
+      DebuggerPath = options.DebuggerPath,
+      DeploymentPath = options.DeploymentPath ?? "/tmp"
     };
 
     var resource = builder.AddResource(remoteHost);
@@ -270,5 +272,41 @@ public static class RemoteHostResourceExtensions
     var endpoint = WithEndpoint(builder, dns, port);
     endpoint.Resource.TransportType = type;
     return endpoint;
+  }
+
+  /// <summary>
+  /// Sets the path on the remote host where the remote debugger (vsdbg) is installed and run from.
+  /// </summary>
+  public static IResourceBuilder<RemoteHostResource> WithDebuggerPath(this IResourceBuilder<RemoteHostResource> builder, string path)
+  {
+    ArgumentNullException.ThrowIfNull(builder);
+    ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+    builder.Resource.DebuggerPath = path;
+    return builder;
+  }
+
+  /// <summary>
+  /// Sets the root path on the remote host where project binaries are deployed.
+  /// </summary>
+  public static IResourceBuilder<RemoteHostResource> WithDeploymentPath(this IResourceBuilder<RemoteHostResource> builder, string path)
+  {
+    ArgumentNullException.ThrowIfNull(builder);
+    ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+    builder.Resource.DeploymentPath = path;
+    return builder;
+  }
+
+  /// <summary>
+  /// Overrides the remote .NET Runtime Identifier instead of detecting it via <c>dotnet --info</c>.
+  /// </summary>
+  public static IResourceBuilder<RemoteHostResource> WithRuntimeIdentifier(this IResourceBuilder<RemoteHostResource> builder, string rid)
+  {
+    ArgumentNullException.ThrowIfNull(builder);
+    ArgumentException.ThrowIfNullOrWhiteSpace(rid);
+
+    builder.Resource.RuntimeIdentifier = rid;
+    return builder;
   }
 }

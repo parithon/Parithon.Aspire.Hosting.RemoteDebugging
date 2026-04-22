@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../Sample.WorkerApp/Sample.WorkerApp.csproj" />
     <ProjectReference Include="..\..\src\Aspire.Hosting.RemoteDebugging\Aspire.Hosting.RemoteDebugging.csproj" IsAspireProjectResource="false" />
   </ItemGroup>
 

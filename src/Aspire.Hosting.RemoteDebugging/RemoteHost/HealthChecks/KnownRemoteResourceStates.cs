@@ -10,6 +10,7 @@ public static class KnownRemoteResourceStates
   public const string Connected = "Connected";
   public const string Reconnecting = "Reconnecting";
   public const string FailedToConnect = "Connection failed";
+  public const string FailedToInitialize = "Failed initialization";
 
   public static string? GetStyle(string state) => state switch
   {

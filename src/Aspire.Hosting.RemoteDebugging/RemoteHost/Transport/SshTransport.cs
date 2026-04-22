@@ -15,7 +15,9 @@ internal sealed class SshTransport : IRemoteHostTransport
   // Interlocked.CompareExchange ensures only one terminal-event path wins.
   private int _disconnected;
 
+  private ConnectionInfo? _connectionInfo;
   private SshClient? _client;
+  private SftpClient? _sftpClient;
   private RemoteHostResource? _resource;
   private string? _shell;
   private SshCommand? _vsdbgCommand;
@@ -57,6 +59,7 @@ internal sealed class SshTransport : IRemoteHostTransport
 
     var authMethod = new PasswordAuthenticationMethod(username, password);
     var connectionInfo = new ConnectionInfo(dns ?? resource.Name, port, username, authMethod);
+    _connectionInfo = connectionInfo;
 
     if (logger.IsEnabled(LogLevel.Trace))
     {
@@ -133,6 +136,54 @@ internal sealed class SshTransport : IRemoteHostTransport
         _shell = "cmd.exe";
     }
 
+    // Detect the remote RID via `dotnet --info` unless the user supplied an override.
+    if (string.IsNullOrWhiteSpace(resource.RuntimeIdentifier))
+    {
+      try
+      {
+        using var ridCmd = _client.CreateCommand("dotnet --info");
+        await Task.Factory.FromAsync(ridCmd.BeginExecute(), ridCmd.EndExecute);
+
+        var ridLine = ridCmd.Result
+          .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+          .FirstOrDefault(l => l.TrimStart().StartsWith("RID:", StringComparison.OrdinalIgnoreCase));
+
+        if (ridLine is not null)
+        {
+          var rid = ridLine.Split(':', 2)[1].Trim();
+          if (!string.IsNullOrWhiteSpace(rid))
+          {
+            resource.DetectedRuntimeIdentifier = rid;
+            if (logger.IsEnabled(LogLevel.Debug))
+              logger.LogDebug("Detected remote RID: {RID}", rid);
+          }
+        }
+        else
+        {
+          logger.LogWarning("Could not parse RID from 'dotnet --info' output. Rebuild decisions will default to always rebuild.");
+        }
+      }
+      catch (Exception ex)
+      {
+        logger.LogWarning(ex, "RID detection via 'dotnet --info' failed. Rebuild decisions will default to always rebuild.");
+      }
+    }
+
+    // Connect the SFTP client with the same credentials.
+    _sftpClient = new SftpClient(connectionInfo);
+    await _sftpClient.ConnectAsync(cancellationToken).ConfigureAwait(false);
+
+    // Ensure the deployment root exists on the remote host.
+    if (resource.DeploymentPath is { Length: > 0 } deploymentPath)
+    {
+      var sftpDeploymentPath = ToSftpPath(deploymentPath);
+      if (!_sftpClient.Exists(sftpDeploymentPath))
+      {
+        logger.LogDebug("Creating remote deployment path: {DeploymentPath}", sftpDeploymentPath);
+        _sftpClient.CreateDirectory(sftpDeploymentPath);
+      }
+    }
+
     if (logger.IsEnabled(LogLevel.Information))
     {
       logger.LogInformation("SSH connection to {Dns}:{Port} verified with shell: {Shell}", dns, port, _shell);
@@ -146,6 +197,7 @@ internal sealed class SshTransport : IRemoteHostTransport
     Interlocked.Exchange(ref _disconnected, 1);
     // TODO: Close the vsdbg agent
     await Task.Delay(1, cancellationToken);
+    _sftpClient?.Disconnect();
     _client?.Disconnect();
     return;
   }
@@ -163,7 +215,8 @@ internal sealed class SshTransport : IRemoteHostTransport
 
     if (_resource.TryGetLastAnnotation<RemoteHostOSPlatformAnnotation>(out var platformAnnotation) && platformAnnotation is not null)
     {
-      var pwshInstallCommand = "iwr -Uri https://aka.ms/getvsdbgps1 -OutFile $env:TEMP\\getvsdbg.ps1; & $env:TEMP\\getvsdbg.ps1 -Version latest -InstallPath $env:LOCALAPPDATA\\Microsoft\\vsdbg";
+      var debuggerPath = GetDebuggerPath(platformAnnotation.Platform);
+      var pwshInstallCommand = $"iwr -Uri https://aka.ms/getvsdbgps1 -OutFile $env:TEMP\\getvsdbg.ps1; & $env:TEMP\\getvsdbg.ps1 -Version latest -InstallPath {debuggerPath}";
       var installCommand = platformAnnotation.Platform switch
       {
           var p when p == OSPlatform.Windows => _shell switch
@@ -174,7 +227,7 @@ internal sealed class SshTransport : IRemoteHostTransport
               _ => throw new InvalidOperationException($"Unsupported shell: '{_shell}'. Expected 'powershell.exe', 'pwsh.exe', or 'cmd.exe'.")
           },
           var p when p == OSPlatform.Linux =>
-              "curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v latest -l ~/.vsdbg",
+              $"curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v latest -l {debuggerPath}",
           var p => throw new PlatformNotSupportedException($"Platform '{p}' is not supported for vsdbg installation.")
       };
       
@@ -222,14 +275,16 @@ internal sealed class SshTransport : IRemoteHostTransport
 
     if (_resource.TryGetLastAnnotation<RemoteHostOSPlatformAnnotation>(out var platformAnnotation) && platformAnnotation is not null)
     {
+      var debuggerPath = GetDebuggerPath(platformAnnotation.Platform);
       var startCommand = platformAnnotation.Platform switch
       {
         var p when p == OSPlatform.Windows => _shell switch {
-          "powershell.exe" => "& \"$env:LOCALAPPDATA\\Microsoft\\vsdbg\\vsdbg.exe\" --interpreter=vscode",
-          "cmd.exe" => "%LOCALAPPDATA%\\Microsoft\\vsdbg\\vsdbg.exe --interpreter=vscode",
+          "powershell.exe" => $"& \"{debuggerPath}\\vsdbg.exe\" --interpreter=vscode",
+          "pwsh.exe"       => $"& \"{debuggerPath}\\vsdbg.exe\" --interpreter=vscode",
+          "cmd.exe"        => $"{debuggerPath}\\vsdbg.exe --interpreter=vscode",
           _ => throw new InvalidOperationException()
         },
-        var p when p == OSPlatform.Linux => "~/.vsdbg/vsdbg --interpreter=vscode",
+        var p when p == OSPlatform.Linux => $"{debuggerPath}/vsdbg --interpreter=vscode",
         var p => throw new PlatformNotSupportedException($"Platform '{p}' is not supported for vsdbg.")
       };
 
@@ -283,12 +338,94 @@ internal sealed class SshTransport : IRemoteHostTransport
 
   public void Dispose()
   {
+    _sftpClient?.Dispose();
+    _sftpClient = null;
     _client?.Dispose();
     _client = null;
   }
 
-  private (string shell, string shellArgs) GetShell(OSPlatform platform)
+  public async Task DeployDirectoryAsync(string localDirectory, string remoteDirectory, ILogger logger, CancellationToken cancellationToken)
   {
+    if (_sftpClient is null || !_sftpClient.IsConnected)
+      throw new InvalidOperationException("SFTP client is not connected.");
+
+    var sftpRemoteDirectory = ToSftpPath(remoteDirectory);
+
+    // Abort any in-flight SFTP call when the token fires by disconnecting the client.
+    using var cancelReg = cancellationToken.Register(() =>
+    {
+      try { _sftpClient.Disconnect(); } catch { /* best-effort */ }
+    });
+
+    // Clean the remote directory to prevent stale artifacts from a previous deploy.
+    if (_sftpClient.Exists(sftpRemoteDirectory))
+    {
+      logger.LogDebug("Cleaning remote directory: {RemoteDir}", sftpRemoteDirectory);
+      await DeleteRemoteDirectoryAsync(_sftpClient, sftpRemoteDirectory, cancellationToken).ConfigureAwait(false);
+    }
+
+    var localRoot = new DirectoryInfo(localDirectory);
+    await UploadDirectoryAsync(_sftpClient, localRoot, sftpRemoteDirectory, logger, cancellationToken).ConfigureAwait(false);
+
+    logger.LogInformation("Deployed {LocalDir} → {RemoteDir}", localDirectory, sftpRemoteDirectory);
+  }
+
+  private static async Task UploadDirectoryAsync(SftpClient sftp, DirectoryInfo localDir, string remotePath, ILogger logger, CancellationToken cancellationToken)
+  {
+    cancellationToken.ThrowIfCancellationRequested();
+    sftp.CreateDirectory(remotePath);
+
+    foreach (var file in localDir.EnumerateFiles())
+    {
+      cancellationToken.ThrowIfCancellationRequested();
+      var remotFile = $"{remotePath}/{file.Name}";
+      logger.LogDebug("Uploading {File}", remotFile);
+      await using var stream = file.OpenRead();
+      await sftp.UploadFileAsync(stream, remotFile, cancellationToken).ConfigureAwait(false);
+    }
+
+    foreach (var subDir in localDir.EnumerateDirectories())
+    {
+      await UploadDirectoryAsync(sftp, subDir, $"{remotePath}/{subDir.Name}", logger, cancellationToken).ConfigureAwait(false);
+    }
+  }
+
+  private static async Task DeleteRemoteDirectoryAsync(SftpClient sftp, string remotePath, CancellationToken cancellationToken)
+  {
+    foreach (var entry in sftp.ListDirectory(remotePath).Where(e => e.Name is not ("." or "..")))
+    {
+      cancellationToken.ThrowIfCancellationRequested();
+      if (entry.IsDirectory)
+        await DeleteRemoteDirectoryAsync(sftp, entry.FullName, cancellationToken).ConfigureAwait(false);
+      else
+        sftp.DeleteFile(entry.FullName);
+    }
+    sftp.DeleteDirectory(remotePath);
+  }
+
+  /// <summary>
+  /// Returns the debugger install/run path: the configured <see cref="RemoteHostResource.DebuggerPath"/>
+  /// if set, otherwise the platform-appropriate default (shell-aware on Windows).
+  /// </summary>
+  private string GetDebuggerPath(OSPlatform platform)
+  {
+    if (_resource?.DebuggerPath is { Length: > 0 } customPath)
+      return customPath;
+
+    if (platform == OSPlatform.Windows)
+      return _shell switch
+      {
+        "powershell.exe" or "pwsh.exe" => "$env:LOCALAPPDATA\\Microsoft\\vsdbg",
+        _ => "%LOCALAPPDATA%\\Microsoft\\vsdbg"
+      };
+
+    if (platform == OSPlatform.Linux)
+      return "~/.vsdbg";
+
+    throw new PlatformNotSupportedException($"Platform '{platform}' is not supported.");
+  }
+
+  private (string shell, string shellArgs) GetShell(OSPlatform platform)  {
     var shell = _shell ?? "cmd.exe";
     if (platform == OSPlatform.Windows)
       return shell switch
@@ -302,5 +439,19 @@ internal sealed class SshTransport : IRemoteHostTransport
       return ("/bin/bash", "-c");
 
     throw new PlatformNotSupportedException($"Platform '{platform}' is not supported.");
+  }
+
+  /// <summary>
+  /// Converts a path to an SFTP-compatible forward-slash path.
+  /// Windows drive-letter paths (e.g. <c>C:\Temp</c>) are mapped to
+  /// <c>/C:/Temp</c> so the SFTP protocol can locate them correctly.
+  /// </summary>
+  private static string ToSftpPath(string path)
+  {
+    // Windows absolute path: e.g. C:\Temp or C:/Temp → /C:/Temp
+    if (path.Length >= 2 && char.IsLetter(path[0]) && path[1] == ':')
+      return '/' + path.Replace('\\', '/');
+
+    return path.Replace('\\', '/');
   }
 }

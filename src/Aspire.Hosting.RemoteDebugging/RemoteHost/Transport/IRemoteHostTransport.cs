@@ -17,4 +17,10 @@ internal interface IRemoteHostTransport : IDisposable
   Task<RemoteDebuggerInstallationResult> InstallRemoteDebugger(ILogger logger, CancellationToken cancellationToken);
   Task<bool> StartRemoteDebugger(ILogger logger, CancellationToken cancellationToken);
   Task<ResourceHealthCheckResult> CheckHealthAsync(ILogger logger, CancellationToken cancellationToken);
+
+  /// <summary>
+  /// Copies all files from <paramref name="localDirectory"/> to <paramref name="remoteDirectory"/>
+  /// on the remote host over SFTP. The remote directory is cleaned before upload to prevent stale artifacts.
+  /// </summary>
+  Task DeployDirectoryAsync(string localDirectory, string remoteDirectory, ILogger logger, CancellationToken cancellationToken);
 }

@@ -1,6 +1,8 @@
 <Solution>
   <Folder Name="/samples/">
     <Project Path="samples/Sample.AppHost/Sample.AppHost.csproj" />
+    <Project Path="samples/Sample.ServiceDefaults/Sample.ServiceDefaults.csproj" />
+    <Project Path="samples/Sample.WorkerApp/Sample.WorkerApp.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Aspire.Hosting.RemoteDebugging/Aspire.Hosting.RemoteDebugging.csproj" />
