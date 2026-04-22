@@ -1,6 +1,6 @@
 using Aspire.Hosting.ApplicationModel;
 
-namespace Aspire.Hosting.RemoteDebugging;
+namespace Aspire.Hosting.RemoteDebugging.RemoteHost;
 
 public sealed class RemoteHostCredential
 {

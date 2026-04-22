@@ -1,8 +1,11 @@
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.RemoteDebugging.RemoteHost;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 
-namespace Aspire.Hosting.RemoteDebugging;
+namespace Aspire.Hosting.RemoteDebugging.RemoteHost.HealthChecks;
 
 internal sealed class RemoteHostHealthCheck(RemoteHostResource resource, ILogger<RemoteHostHealthCheck> logger) : IHealthCheck
 {

@@ -1,6 +1,7 @@
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 
-namespace Aspire.Hosting.RemoteDebugging;
+namespace Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
 
 internal sealed class RemoteHostTransportAnnotation(IRemoteHostTransport transport) : IResourceAnnotation, IDisposable
 {

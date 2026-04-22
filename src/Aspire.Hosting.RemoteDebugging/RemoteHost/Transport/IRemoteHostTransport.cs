@@ -1,6 +1,8 @@
+using Aspire.Hosting.RemoteDebugging.RemoteHost;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.HealthChecks;
 using Microsoft.Extensions.Logging;
 
-namespace Aspire.Hosting.RemoteDebugging;
+namespace Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 
 internal interface IRemoteHostTransport : IDisposable
 {

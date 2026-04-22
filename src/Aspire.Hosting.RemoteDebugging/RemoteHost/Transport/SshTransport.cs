@@ -1,10 +1,13 @@
 using System.Runtime.InteropServices;
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.RemoteDebugging.RemoteHost;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.HealthChecks;
 using Microsoft.Extensions.Logging;
 using Renci.SshNet;
 using Renci.SshNet.Common;
 
-namespace Aspire.Hosting.RemoteDebugging;
+namespace Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 
 internal sealed class SshTransport : IRemoteHostTransport
 {

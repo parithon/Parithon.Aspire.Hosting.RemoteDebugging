@@ -1,9 +1,10 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Eventing;
 using Aspire.Hosting.Lifecycle;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
 using Microsoft.Extensions.Logging;
 
-namespace Aspire.Hosting.RemoteDebugging;
+namespace Aspire.Hosting.RemoteDebugging.RemoteHost;
 
 internal sealed class RemoteHostEventingSubscriber(ResourceNotificationService notifications, ResourceLoggerService loggers) : IDistributedApplicationEventingSubscriber
 {

@@ -1,11 +1,15 @@
 using System.Runtime.InteropServices;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Lifecycle;
+using Aspire.Hosting.RemoteDebugging.RemoteHost;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.HealthChecks;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 
-namespace Aspire.Hosting.RemoteDebugging;
+namespace Aspire.Hosting;
 
 public static class RemoteHostResourceExtensions
 {

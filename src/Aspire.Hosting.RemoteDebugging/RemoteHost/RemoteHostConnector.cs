@@ -1,7 +1,10 @@
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.HealthChecks;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 using Microsoft.Extensions.Logging;
 
-namespace Aspire.Hosting.RemoteDebugging;
+namespace Aspire.Hosting.RemoteDebugging.RemoteHost;
 
 internal static class RemoteHostConnector
 {

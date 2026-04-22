@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using Aspire.Hosting.ApplicationModel;
 
-namespace Aspire.Hosting.RemoteDebugging;
+namespace Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
 
 public class RemoteHostOSPlatformAnnotation(OSPlatform platform) : IResourceAnnotation
 {

@@ -1,4 +1,4 @@
-namespace Aspire.Hosting.RemoteDebugging;
+namespace Aspire.Hosting.RemoteDebugging.RemoteHost.HealthChecks;
 
 /// <summary>
 /// Represents the result of a health check for a remote host resource.

@@ -1,7 +1,9 @@
 using System.Runtime.InteropServices;
 using Aspire.Hosting.ApplicationModel;
 
-namespace Aspire.Hosting.RemoteDebugging;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
+
+namespace Aspire.Hosting.RemoteDebugging.RemoteHost;
 
 public sealed class RemoteHostOptions
 {

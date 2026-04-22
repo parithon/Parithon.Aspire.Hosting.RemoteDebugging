@@ -1,6 +1,7 @@
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.HealthChecks;
 
-namespace Aspire.Hosting.RemoteDebugging;
+namespace Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
 
 /// <summary>
 /// Annotation to store the health check provider for a remote host resource.
