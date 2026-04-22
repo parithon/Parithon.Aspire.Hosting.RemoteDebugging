@@ -8,13 +8,26 @@ namespace Aspire.Hosting.RemoteDebugging;
 
 internal sealed class SshTransport : IRemoteHostTransport
 {
+  // 0 = active, 1 = terminal (disconnecting or disconnected).
+  // Interlocked.CompareExchange ensures only one terminal-event path wins.
+  private int _disconnected;
+
   private SshClient? _client;
   private RemoteHostResource? _resource;
   private string? _shell;
+  private SshCommand? _vsdbgCommand;
+  private IAsyncResult? _vsdbgAsyncResult;
+  private DateTime _vsdbgStartTime;
+
+  public event EventHandler? ConnectionDropped;
+  public event EventHandler? RemoteDebuggerExited;
 
   public async Task ConnectAsync(RemoteHostResource resource, ILogger logger, CancellationToken cancellationToken)
   {
     ArgumentNullException.ThrowIfNull(resource);
+
+    // Reset the terminal-state gate so events fire again after a reconnect.
+    Interlocked.Exchange(ref _disconnected, 0);
 
     _resource = resource;
 
@@ -65,6 +78,9 @@ internal sealed class SshTransport : IRemoteHostTransport
     _client.ErrorOccurred += (s, e) =>
     {
       logger.LogError(e.Exception, "An error occurred within the SSH client.");
+      // Only raise ConnectionDropped once, and only when not intentionally disconnecting.
+      if (Interlocked.CompareExchange(ref _disconnected, 1, 0) == 0)
+        ConnectionDropped?.Invoke(this, EventArgs.Empty);
     };
     await _client.ConnectAsync(cancellationToken);
 
@@ -85,22 +101,46 @@ internal sealed class SshTransport : IRemoteHostTransport
         .Split(['\r','\n'], StringSplitOptions.RemoveEmptyEntries)
         .FirstOrDefault(l => l.TrimStart().StartsWith("DefaultShell", StringComparison.OrdinalIgnoreCase));
 
-      _shell = line is not null
-        ? Path.GetFileName(line.Split([' ','\t'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault())
-        : "cmd.exe";
-
-        if (string.IsNullOrWhiteSpace(_shell))
+      if (line is not null)
+      {
+        var tokens = line.Split([' ','\t'], StringSplitOptions.RemoveEmptyEntries);
+        var shellValue = tokens.Length > 0 ? tokens[^1] : null;
+        
+        if (!string.IsNullOrWhiteSpace(shellValue))
+        {
+          // Extract just the filename from the registry value (may contain Windows backslashes)
+          _shell = shellValue.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "cmd.exe";
+          
+          if (logger.IsEnabled(LogLevel.Debug))
+          {
+            logger.LogDebug("Detected shell from registry: '{RegistryValue}' -> '{ShellName}'", shellValue, _shell);
+          }
+        }
+        else
+        {
           _shell = "cmd.exe";
+        }
+      }
+      else
+      {
+        _shell = "cmd.exe";
+      }
+
+      if (string.IsNullOrWhiteSpace(_shell) || _shell.Equals("null", StringComparison.OrdinalIgnoreCase))
+        _shell = "cmd.exe";
     }
 
     if (logger.IsEnabled(LogLevel.Information))
     {
-      logger.LogInformation("SSH connection to {Dns}:{Port} verified", dns, port);
+      logger.LogInformation("SSH connection to {Dns}:{Port} verified with shell: {Shell}", dns, port, _shell);
     }
   }
 
   public async Task DisconnectAsync(ILogger logger, CancellationToken cancellationToken)
   {
+    // Mark as terminal before disconnecting so the ErrorOccurred / BeginExecute
+    // callbacks do not raise unexpected-exit events.
+    Interlocked.Exchange(ref _disconnected, 1);
     // TODO: Close the vsdbg agent
     await Task.Delay(1, cancellationToken);
     _client?.Disconnect();
@@ -126,8 +166,9 @@ internal sealed class SshTransport : IRemoteHostTransport
           var p when p == OSPlatform.Windows => _shell switch
           {
               "powershell.exe" => pwshInstallCommand,
+              "pwsh.exe" => pwshInstallCommand,
               "cmd.exe" => $"powershell.exe -NonInteractive -Command {pwshInstallCommand}",
-              _ => throw new InvalidOperationException()
+              _ => throw new InvalidOperationException($"Unsupported shell: '{_shell}'. Expected 'powershell.exe', 'pwsh.exe', or 'cmd.exe'.")
           },
           var p when p == OSPlatform.Linux =>
               "curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v latest -l ~/.vsdbg",
@@ -181,33 +222,60 @@ internal sealed class SshTransport : IRemoteHostTransport
       var startCommand = platformAnnotation.Platform switch
       {
         var p when p == OSPlatform.Windows => _shell switch {
-          "powershell.exe" => "& \"$env:LOCALAPPDATA\\Microsoft\\vsdbg\\vsdbg.exe\" --server --port 4711 --interpreter=vscode",
-          "cmd.exe" => "%LOCALAPPDATA%\\Microsoft\\vsdbg\\vsdbg.exe --server --port 4711 --interpreter=vscode",
+          "powershell.exe" => "& \"$env:LOCALAPPDATA\\Microsoft\\vsdbg\\vsdbg.exe\" --interpreter=vscode",
+          "cmd.exe" => "%LOCALAPPDATA%\\Microsoft\\vsdbg\\vsdbg.exe --interpreter=vscode",
           _ => throw new InvalidOperationException()
         },
-        var p when p == OSPlatform.Linux => "~/.vsdbg/vsdbg --server --port 4711 --interpreter=vscode",
+        var p when p == OSPlatform.Linux => "~/.vsdbg/vsdbg --interpreter=vscode",
         var p => throw new PlatformNotSupportedException($"Platform '{p}' is not supported for vsdbg.")
       };
 
       var (shell, args) = GetShell(platformAnnotation.Platform);
-      var cmd = _client.CreateCommand($"{shell} {args} \"{startCommand}\"");
-      cmd.BeginExecute(ar =>
+      _vsdbgCommand = _client.CreateCommand($"{shell} {args} \"{startCommand}\"");
+      _vsdbgStartTime = DateTime.UtcNow;
+
+      // Capture the command instance so the callback reads the correct object
+      // even if _vsdbgCommand is replaced by a future restart.
+      var capturedCommand = _vsdbgCommand;
+      _vsdbgAsyncResult = capturedCommand.BeginExecute(ar =>
       {
         try {
-          cmd.EndExecute(ar);
-          if (cmd.ExitStatus != 0)
-            logger.LogWarning("vsdbg exited with code {ExitCode}. {Error}", cmd.ExitStatus, cmd.Error);
+          capturedCommand.EndExecute(ar);
+          if (capturedCommand.ExitStatus != 0)
+            logger.LogWarning("vsdbg exited with code {ExitCode}. {Error}", capturedCommand.ExitStatus, capturedCommand.Error);
         }
         catch (Exception ex)
         {
           logger.LogError(ex, "vsdbg exited unexpectedly.");
         }
+
+        // Only raise the event when the exit is unexpected (not during intentional disconnect).
+        // CompareExchange: if _disconnected is still 0, set it to 0 and get 0 back — fire event.
+        // We do NOT set _disconnected=1 here; that is only set for connection-level termination.
+        // We use a simple read so a vsdbg restart keeps _disconnected=0 for future exits.
+        if (Interlocked.CompareExchange(ref _disconnected, 0, 0) == 0)
+          RemoteDebuggerExited?.Invoke(this, EventArgs.Empty);
       }, null);
 
       return true;
     }
 
     return false;
+  }
+
+  public Task<ResourceHealthCheckResult> CheckHealthAsync(ILogger logger, CancellationToken cancellationToken)
+  {
+    if (_client is null || !_client.IsConnected)
+      return Task.FromResult(ResourceHealthCheckResult.Unhealthy("SSH connection is not established"));
+
+    if (_vsdbgCommand is null || _vsdbgAsyncResult is null)
+      return Task.FromResult(ResourceHealthCheckResult.Unknown("vsdbg has not been started yet"));
+
+    if (_vsdbgAsyncResult.IsCompleted)
+      return Task.FromResult(ResourceHealthCheckResult.Unhealthy("vsdbg has exited"));
+
+    var uptime = DateTime.UtcNow - _vsdbgStartTime;
+    return Task.FromResult(ResourceHealthCheckResult.Healthy($"vsdbg running for {uptime.TotalSeconds:F0}s"));
   }
 
   public void Dispose()

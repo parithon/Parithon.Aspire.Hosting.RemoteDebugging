@@ -2,6 +2,8 @@ using System.Runtime.InteropServices;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Lifecycle;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.RemoteDebugging;
 
@@ -54,6 +56,19 @@ public static class RemoteHostResourceExtensions
 
     var resource = builder.AddResource(remoteHost);
 
+    // Register the health check with Aspire's health check service so it
+    // appears in the dashboard "Health checks" section.
+    var healthCheckKey = $"{name}-vsdbg";
+    builder.Services.AddHealthChecks().Add(new HealthCheckRegistration(
+      healthCheckKey,
+      sp => new RemoteHostHealthCheck(remoteHost, sp.GetRequiredService<ILoggerFactory>().CreateLogger<RemoteHostHealthCheck>()),
+      failureStatus: null,
+      tags: null)
+    {
+      Delay = TimeSpan.FromSeconds(5),
+      Period = TimeSpan.FromSeconds(30)
+    });
+
     if (options.Credential.Password is not null)
     {
       resource.WithReferenceRelationship(options.Credential.Password);
@@ -80,6 +95,7 @@ public static class RemoteHostResourceExtensions
         Properties = []
       })
       .WithAnnotation(platformAnnotation)
+      .WithAnnotation(new HealthCheckAnnotation(healthCheckKey))
       .WithCommand(name: "connect", displayName: "Connect", executeCommand: async context =>
       {
         var notifications = context.ServiceProvider.GetRequiredService<ResourceNotificationService>();

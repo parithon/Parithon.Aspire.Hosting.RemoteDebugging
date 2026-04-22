@@ -25,8 +25,10 @@ public static class KnownRemoteResourceStates
   public static readonly ResourceStateSnapshot DisconnectedSnapshot     = new(Disconnected, GetStyle(Disconnected));
   public static readonly ResourceStateSnapshot ConnectingSnapshot       = new(Connecting, GetStyle(Connecting));
   public static readonly ResourceStateSnapshot ConnectedSnapshot        = new(Connected, GetStyle(Connected));
+  public static readonly ResourceStateSnapshot RunningSnapshot          = new(KnownResourceStates.Running, KnownResourceStateStyles.Success);
   public static readonly ResourceStateSnapshot ReconnectingSnapshot     = new(Reconnecting, GetStyle(Reconnecting));
   public static readonly ResourceStateSnapshot FailedToConnectSnapshot  = new(FailedToConnect, GetStyle(FailedToConnect));
+  public static readonly ResourceStateSnapshot ExitedSnapshot           = new(KnownResourceStates.Exited, null);
   public static readonly ResourceStateSnapshot InstallRemoteDebuggerSnapshot = new("Initializing", KnownResourceStateStyles.Info);
   public static readonly ResourceStateSnapshot FailedToInitializeSnapshot = new("Failed initialization", KnownResourceStateStyles.Error);
 }

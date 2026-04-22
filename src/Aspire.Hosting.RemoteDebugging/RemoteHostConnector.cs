@@ -7,6 +7,19 @@ internal static class RemoteHostConnector
 {
   internal static async Task ConnectAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken)
   {
+    await resource.ConnectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+    try
+    {
+      await ConnectCoreAsync(resource, notifications, loggers, cancellationToken).ConfigureAwait(false);
+    }
+    finally
+    {
+      resource.ConnectGate.Release();
+    }
+  }
+
+  private static async Task ConnectCoreAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken)
+  {
     var logger = loggers.GetLogger(resource);
 
     await notifications.PublishUpdateAsync(resource, s => s with
@@ -55,6 +68,9 @@ internal static class RemoteHostConnector
         return;
       }
 
+      // Subscribe to transport events BEFORE starting vsdbg so no exit event is missed.
+      SubscribeTransportEvents(transport, resource, notifications, loggers, cancellationToken);
+
       var started = await transport.StartRemoteDebugger(logger, cancellationToken);
       if (!started)
       {
@@ -65,6 +81,12 @@ internal static class RemoteHostConnector
         }).ConfigureAwait(false);
         return;
       }
+
+      // Transition through Running to start Aspire's health check loop, then settle on Connected.
+      await notifications.PublishUpdateAsync(resource, s => s with
+      {
+        State = KnownRemoteResourceStates.RunningSnapshot
+      }).ConfigureAwait(false);
 
       await notifications.PublishUpdateAsync(resource, s => s with
       {
@@ -82,9 +104,98 @@ internal static class RemoteHostConnector
     }
   }
 
+  private static void SubscribeTransportEvents(
+    IRemoteHostTransport transport,
+    RemoteHostResource resource,
+    ResourceNotificationService notifications,
+    ResourceLoggerService loggers,
+    CancellationToken cancellationToken)
+  {
+    transport.RemoteDebuggerExited += (_, _) =>
+    {
+      _ = Task.Run(async () =>
+      {
+        var log = loggers.GetLogger(resource);
+        try
+        {
+          log.LogWarning("vsdbg exited unexpectedly. Attempting restart...");
+
+          var restarted = await transport.StartRemoteDebugger(log, CancellationToken.None).ConfigureAwait(false);
+          if (restarted)
+          {
+            log.LogInformation("vsdbg restarted successfully.");
+            await notifications.PublishUpdateAsync(resource, s => s with
+            {
+              State = KnownRemoteResourceStates.RunningSnapshot
+            }).ConfigureAwait(false);
+            await notifications.PublishUpdateAsync(resource, s => s with
+            {
+              State = KnownRemoteResourceStates.ConnectedSnapshot
+            }).ConfigureAwait(false);
+          }
+          else
+          {
+            log.LogError("vsdbg could not be restarted.");
+            await notifications.PublishUpdateAsync(resource, s => s with
+            {
+              State = new ResourceStateSnapshot(KnownResourceStates.Exited, KnownResourceStateStyles.Error),
+              StopTimeStamp = DateTime.UtcNow
+            }).ConfigureAwait(false);
+          }
+        }
+        catch (Exception ex)
+        {
+          log.LogError(ex, "Unhandled exception while restarting vsdbg for {Name}.", resource.Name);
+        }
+      }, CancellationToken.None);
+    };
+
+    transport.ConnectionDropped += (_, _) =>
+    {
+      _ = Task.Run(async () =>
+      {
+        var log = loggers.GetLogger(resource);
+        try
+        {
+          log.LogError("SSH connection to {Name} was lost. Reconnecting in 5 seconds...", resource.Name);
+
+          await notifications.PublishUpdateAsync(resource, s => s with
+          {
+            State = KnownRemoteResourceStates.ReconnectingSnapshot
+          }).ConfigureAwait(false);
+
+          await Task.Delay(TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false);
+          await ConnectAsync(resource, notifications, loggers, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+          log.LogError(ex, "Reconnect attempt for {Name} failed.", resource.Name);
+        }
+      }, CancellationToken.None);
+    };
+  }
+
   internal static async Task DisconnectAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken)
   {
+    await resource.ConnectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+    try
+    {
+      await DisconnectCoreAsync(resource, notifications, loggers, cancellationToken).ConfigureAwait(false);
+    }
+    finally
+    {
+      resource.ConnectGate.Release();
+    }
+  }
+
+  private static async Task DisconnectCoreAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken)
+  {
     var logger = loggers.GetLogger(resource);
+
+    await notifications.PublishUpdateAsync(resource, s => s with
+    {
+      State = KnownRemoteResourceStates.ExitedSnapshot
+    }).ConfigureAwait(false);
 
     await notifications.PublishUpdateAsync(resource, s => s with
     {

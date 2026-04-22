@@ -1,6 +1,7 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Eventing;
 using Aspire.Hosting.Lifecycle;
+using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.RemoteDebugging;
 
@@ -17,7 +18,22 @@ internal sealed class RemoteHostEventingSubscriber(ResourceNotificationService n
 
       foreach (var resource in resources)
       {
-        _ = RemoteHostConnector.ConnectAsync(resource, notifications, loggers, ct);
+        _ = Task.Run(async () =>
+        {
+          try
+          {
+            await RemoteHostConnector.ConnectAsync(resource, notifications, loggers, ct).ConfigureAwait(false);
+          }
+          catch (OperationCanceledException)
+          {
+            // Expected when shutting down
+          }
+          catch (Exception ex)
+          {
+            var logger = loggers.GetLogger(resource);
+            logger.LogError(ex, "Failed to auto-connect to remote host {Name}", resource.Name);
+          }
+        }, ct);
       }
 
       return Task.CompletedTask;
@@ -31,7 +47,6 @@ internal sealed class RemoteHostEventingSubscriber(ResourceNotificationService n
       if (!remoteHost.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var annotation))
         return;
 
-      var logger = loggers.GetLogger(remoteHost);
       await RemoteHostConnector.DisconnectAsync(remoteHost, notifications, loggers, ct);
       annotation.Dispose();
     });

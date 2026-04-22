@@ -14,4 +14,7 @@ public sealed class RemoteHostResource(string name)
   public int? Port { get; set; }
   internal IResourceBuilder<ParameterResource>? DnsParameter { get; set; }
   internal IResourceBuilder<ParameterResource>? PortParameter { get; set; }
+
+  /// <summary>Serializes concurrent connect/disconnect operations for this resource.</summary>
+  internal SemaphoreSlim ConnectGate { get; } = new SemaphoreSlim(1, 1);
 }
