@@ -24,6 +24,15 @@ public static class KnownRemoteProjectStates
     _              => null
   };
 
+  public static bool IsRunning(string state) => state switch
+  {
+    Building => true,
+    Deploying => true,
+    Starting => true,
+    "Running" => true,
+    _ => false
+  };
+
   public static readonly ResourceStateSnapshot BuildingSnapshot       = new(Building,       GetStyle(Building));
   public static readonly ResourceStateSnapshot DeployingSnapshot      = new(Deploying,      GetStyle(Deploying));
   public static readonly ResourceStateSnapshot StartingSnapshot       = new(Starting,       GetStyle(Starting));

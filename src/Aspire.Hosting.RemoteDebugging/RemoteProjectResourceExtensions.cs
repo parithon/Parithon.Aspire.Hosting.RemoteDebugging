@@ -1,7 +1,10 @@
+using System.Net.Mime;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Lifecycle;
 using Aspire.Hosting.RemoteDebugging.RemoteHost;
 using Aspire.Hosting.RemoteDebugging.RemoteProject;
+using Aspire.Hosting.RemoteDebugging.RemoteProject.HealthChecks;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aspire.Hosting;
 
@@ -23,6 +26,44 @@ public static class RemoteProjectResourceExtensions
         State = KnownResourceStates.Waiting,
         CreationTimeStamp = DateTime.UtcNow,
         Properties = []
+      })
+      .WithCommand(name: "start", displayName: "Start", async context =>
+      {
+        var notifications = context.ServiceProvider.GetRequiredService<ResourceNotificationService>();
+        var loggers = context.ServiceProvider.GetRequiredService<ResourceLoggerService>();        
+        // TODO: Start the application on the remote host
+        return CommandResults.Success();
+      }, new CommandOptions
+      {
+        UpdateState = ctx =>
+        {
+          var state = ctx.ResourceSnapshot.State?.Text;
+          return KnownRemoteProjectStates.IsRunning(state ?? string.Empty)
+            ? ResourceCommandState.Disabled
+            : ResourceCommandState.Enabled; 
+        },
+        IconName = "Play",
+        IconVariant = IconVariant.Filled,
+        IsHighlighted = true
+      })
+      .WithCommand(name: "stop", displayName:" Stop", async context =>
+      {
+        var notifications = context.ServiceProvider.GetRequiredService<ResourceNotificationService>();
+        var loggers = context.ServiceProvider.GetRequiredService<ResourceLoggerService>();        
+        // TODO: Stop the application on the remote host
+        return CommandResults.Success();
+      }, new CommandOptions
+      {
+        UpdateState = ctx =>
+        {
+          var state = ctx.ResourceSnapshot.State?.Text;
+          return !KnownRemoteProjectStates.IsRunning(state ?? string.Empty)
+            ? ResourceCommandState.Disabled
+            : ResourceCommandState.Enabled;
+        },
+        IconName = "Stop",
+        IconVariant = IconVariant.Filled,
+        IsHighlighted = true
       });
   }
 }

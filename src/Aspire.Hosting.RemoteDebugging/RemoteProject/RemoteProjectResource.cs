@@ -1,5 +1,6 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.RemoteDebugging.RemoteHost;
+using Aspire.Hosting.RemoteDebugging.RemoteProject.HealthChecks;
 
 namespace Aspire.Hosting.RemoteDebugging.RemoteProject;
 
