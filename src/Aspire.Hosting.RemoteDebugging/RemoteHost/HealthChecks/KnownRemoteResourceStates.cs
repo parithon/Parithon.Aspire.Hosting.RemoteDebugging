@@ -12,6 +12,8 @@ public static class KnownRemoteResourceStates
   public const string FailedToConnect = "Connection failed";
   public const string FailedToInitialize = "Failed initialization";
 
+  public const string InstallRemoteTools = "Installing tools";
+
   public static string? GetStyle(string state) => state switch
   {
     Connecting    => KnownResourceStateStyles.Info,
@@ -19,6 +21,7 @@ public static class KnownRemoteResourceStates
     Reconnecting  => KnownResourceStateStyles.Warn,
     Disconnecting => KnownResourceStateStyles.Info,
     FailedToConnect => KnownResourceStateStyles.Error,
+    InstallRemoteTools => KnownResourceStateStyles.Info,
     _ => null // Disconnected
   };
 
@@ -30,6 +33,6 @@ public static class KnownRemoteResourceStates
   public static readonly ResourceStateSnapshot ReconnectingSnapshot     = new(Reconnecting, GetStyle(Reconnecting));
   public static readonly ResourceStateSnapshot FailedToConnectSnapshot  = new(FailedToConnect, GetStyle(FailedToConnect));
   public static readonly ResourceStateSnapshot ExitedSnapshot           = new(KnownResourceStates.Exited, null);
-  public static readonly ResourceStateSnapshot InstallRemoteDebuggerSnapshot = new("Initializing", KnownResourceStateStyles.Info);
+  public static readonly ResourceStateSnapshot InstallingToolsSnapshot  = new(InstallRemoteTools, GetStyle(InstallRemoteTools));
   public static readonly ResourceStateSnapshot FailedToInitializeSnapshot = new("Failed initialization", KnownResourceStateStyles.Error);
 }

@@ -56,7 +56,7 @@ internal static class RemoteHostConnector
 
       await notifications.PublishUpdateAsync(resource, s => s with
       {
-        State = KnownRemoteResourceStates.InstallRemoteDebuggerSnapshot
+        State = KnownRemoteResourceStates.InstallingToolsSnapshot
       }).ConfigureAwait(false);
       
       var vsdbResult = await transport.InstallRemoteDebugger(logger, cancellationToken);
@@ -69,6 +69,19 @@ internal static class RemoteHostConnector
           StopTimeStamp = DateTime.UtcNow
         }).ConfigureAwait(false);
         return;
+      }
+
+      // Deploy the aspire-sidecar alongside vsdbg, then start the daemon.
+      try
+      {
+        var sidecarDir = SidecarExtractor.ExtractToTempDirectory();
+        await transport.DeploySidecarAsync(sidecarDir, logger, cancellationToken).ConfigureAwait(false);
+        await transport.StartSidecarDaemonAsync(logger, cancellationToken).ConfigureAwait(false);
+      }
+      catch (Exception ex)
+      {
+        // Sidecar deployment is non-fatal; log and continue.
+        logger.LogWarning(ex, "Failed to deploy or start aspire-sidecar. Continuing without it.");
       }
 
       // Subscribe to transport events BEFORE starting vsdbg so no exit event is missed.
