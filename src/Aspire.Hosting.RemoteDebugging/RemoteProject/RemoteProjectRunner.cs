@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Xml.Linq;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
@@ -121,11 +120,6 @@ internal static class RemoteProjectRunner
       ?? throw new InvalidOperationException(
            $"Cannot determine directory for project path '{projectPath}'.");
 
-    var remoteRid = resource.Parent.EffectiveRuntimeIdentifier
-      ?? throw new InvalidOperationException(
-           $"Cannot build '{resource.Name}': the remote host's Runtime Identifier could not be determined. " +
-           "Use '.WithRuntimeIdentifier(...)' on the remote host to set it explicitly.");
-
     var csprojXml = XDocument.Load(projectPath);
 
     // Support both <TargetFramework> (single) and <TargetFrameworks> (multi-targeting).
@@ -150,16 +144,8 @@ internal static class RemoteProjectRunner
              $"Ensure the project includes '{currentTfm}' as a target framework.");
     }
 
-    var localRid = RuntimeInformation.RuntimeIdentifier;
-    var crossCompile = !string.Equals(remoteRid, localRid, StringComparison.OrdinalIgnoreCase);
-
     if (logger.IsEnabled(LogLevel.Information))
-    {
-      if (crossCompile)
-        logger.LogInformation("Cross-compiling for remote RID {RemoteRid} (local: {LocalRid})", remoteRid, localRid);
-      else
-        logger.LogInformation("Building for RID {LocalRid} (matches remote)", localRid);
-    }
+      logger.LogInformation("Building framework-dependent artifact for {Project} ({Tfm})", Path.GetFileName(projectPath), tfm);
 
     var psi = new ProcessStartInfo("dotnet")
     {
@@ -174,16 +160,9 @@ internal static class RemoteProjectRunner
     psi.ArgumentList.Add("Debug");
     psi.ArgumentList.Add("-f");
     psi.ArgumentList.Add(tfm);
-    if (crossCompile)
-    {
-      psi.ArgumentList.Add("-r");
-      psi.ArgumentList.Add(remoteRid);
-    }
 
     if (logger.IsEnabled(LogLevel.Debug))
-    {
       logger.LogDebug("Running: dotnet {Args}", string.Join(' ', psi.ArgumentList));
-    }
 
     using var process = new Process { StartInfo = psi };
     process.Start();
@@ -208,9 +187,7 @@ internal static class RemoteProjectRunner
       throw new InvalidOperationException(
         $"'dotnet build' failed with exit code {process.ExitCode}. See resource logs for details.");
 
-    resource.BuildOutputPath = crossCompile
-      ? Path.Combine(projectDir, "bin", "Debug", tfm, remoteRid)
-      : Path.Combine(projectDir, "bin", "Debug", tfm);
+    resource.BuildOutputPath = Path.Combine(projectDir, "bin", "Debug", tfm);
   }
 
   /// <summary>Reads lines from <paramref name="reader"/> until EOF, forwarding each to the logger.</summary>

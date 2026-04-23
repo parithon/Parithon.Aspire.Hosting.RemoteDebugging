@@ -136,39 +136,6 @@ internal sealed class SshTransport : IRemoteHostTransport
         _shell = "cmd.exe";
     }
 
-    // Detect the remote RID via `dotnet --info` unless the user supplied an override.
-    if (string.IsNullOrWhiteSpace(resource.RuntimeIdentifier))
-    {
-      try
-      {
-        using var ridCmd = _client.CreateCommand("dotnet --info");
-        await Task.Factory.FromAsync(ridCmd.BeginExecute(), ridCmd.EndExecute);
-
-        var ridLine = ridCmd.Result
-          .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-          .FirstOrDefault(l => l.TrimStart().StartsWith("RID:", StringComparison.OrdinalIgnoreCase));
-
-        if (ridLine is not null)
-        {
-          var rid = ridLine.Split(':', 2)[1].Trim();
-          if (!string.IsNullOrWhiteSpace(rid))
-          {
-            resource.DetectedRuntimeIdentifier = rid;
-            if (logger.IsEnabled(LogLevel.Debug))
-              logger.LogDebug("Detected remote RID: {RID}", rid);
-          }
-        }
-        else
-        {
-          logger.LogWarning("Could not parse RID from 'dotnet --info' output. Rebuild decisions will default to always rebuild.");
-        }
-      }
-      catch (Exception ex)
-      {
-        logger.LogWarning(ex, "RID detection via 'dotnet --info' failed. Rebuild decisions will default to always rebuild.");
-      }
-    }
-
     // Connect the SFTP client with the same credentials.
     _sftpClient = new SftpClient(connectionInfo);
     await _sftpClient.ConnectAsync(cancellationToken).ConfigureAwait(false);

@@ -298,15 +298,4 @@ public static class RemoteHostResourceExtensions
     return builder;
   }
 
-  /// <summary>
-  /// Overrides the remote .NET Runtime Identifier instead of detecting it via <c>dotnet --info</c>.
-  /// </summary>
-  public static IResourceBuilder<RemoteHostResource> WithRuntimeIdentifier(this IResourceBuilder<RemoteHostResource> builder, string rid)
-  {
-    ArgumentNullException.ThrowIfNull(builder);
-    ArgumentException.ThrowIfNullOrWhiteSpace(rid);
-
-    builder.Resource.RuntimeIdentifier = rid;
-    return builder;
-  }
 }

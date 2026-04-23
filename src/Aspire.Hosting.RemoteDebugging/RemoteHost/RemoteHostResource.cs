@@ -29,24 +29,6 @@ public sealed class RemoteHostResource(string name)
   /// </summary>
   public string DeploymentPath { get; set; } = "/tmp";
 
-  /// <summary>
-  /// Explicit .NET Runtime Identifier override (e.g. <c>linux-x64</c>, <c>win-arm64</c>).
-  /// When set, detection via <c>dotnet --info</c> is skipped and this value is used as-is.
-  /// </summary>
-  public string? RuntimeIdentifier { get; set; }
-
-  /// <summary>
-  /// The RID reported by <c>dotnet --info</c> on the remote host during connection.
-  /// Set by the transport; <see langword="null"/> until connected or if detection failed.
-  /// </summary>
-  internal string? DetectedRuntimeIdentifier { get; set; }
-
-  /// <summary>
-  /// The effective RID: the user-supplied <see cref="RuntimeIdentifier"/> when set,
-  /// otherwise the value detected during connection.
-  /// </summary>
-  public string? EffectiveRuntimeIdentifier => RuntimeIdentifier ?? DetectedRuntimeIdentifier;
-
   internal IResourceBuilder<ParameterResource>? DnsParameter { get; set; }
   internal IResourceBuilder<ParameterResource>? PortParameter { get; set; }
 
