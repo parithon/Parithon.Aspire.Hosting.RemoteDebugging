@@ -54,6 +54,24 @@ internal static class RemoteHostConnector
       await transport.ConnectAsync(resource, logger, cancellationToken).ConfigureAwait(false);
       resource.Annotations.Add(new RemoteHostTransportAnnotation(transport));
 
+      // Deploy the sidecar agent to the remote host.
+      await notifications.PublishUpdateAsync(resource, s => s with
+      {
+        State = KnownRemoteResourceStates.DeployingSidecarSnapshot
+      }).ConfigureAwait(false);
+
+      var localSidecarDir = Path.Combine(AppContext.BaseDirectory, "sidecar");
+      if (!Directory.Exists(localSidecarDir))
+        throw new InvalidOperationException(
+          $"Sidecar directory not found at '{localSidecarDir}'. Ensure the Aspire.Hosting.RemoteDebugging package has been built.");
+
+      var remoteSidecarPath = $"{resource.DeploymentPath}/sidecar";
+      if (logger.IsEnabled(LogLevel.Information))
+        logger.LogInformation("Deploying sidecar to {RemotePath}", remoteSidecarPath);
+
+      await transport.DeployDirectoryAsync(localSidecarDir, remoteSidecarPath, logger, cancellationToken)
+        .ConfigureAwait(false);
+
       await notifications.PublishUpdateAsync(resource, s => s with
       {
         State = KnownRemoteResourceStates.InstallingToolsSnapshot
