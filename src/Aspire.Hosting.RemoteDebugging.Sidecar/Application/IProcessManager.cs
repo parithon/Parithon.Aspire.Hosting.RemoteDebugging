@@ -35,6 +35,14 @@ internal interface IProcessManager
   ILogBuffer? GetLogBuffer(string name);
 
   /// <summary>
+  /// Stops all managed processes and removes them from the registry.
+  /// Returns the number of processes that were stopped.
+  /// Used by <see cref="Infrastructure.ConnectionMonitor"/> during shutdown and
+  /// by the <c>Reset</c> RPC when a new AppHost session reconnects to an existing sidecar.
+  /// </summary>
+  Task<int> StopAllAsync(CancellationToken cancellationToken);
+
+  /// <summary>
   /// Returns all registered <see cref="ManagedProcess"/> instances.
   /// Used by <see cref="Infrastructure.ConnectionMonitor"/> and
   /// <see cref="Infrastructure.LogCachePersistence"/> during shutdown.

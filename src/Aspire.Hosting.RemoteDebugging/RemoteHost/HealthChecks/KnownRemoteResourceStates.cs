@@ -14,6 +14,7 @@ public static class KnownRemoteResourceStates
 
   public const string InstallRemoteTools = "Installing tools";
   public const string DeployingSidecar   = "Deploying sidecar";
+  public const string StartingSidecar    = "Starting sidecar";
 
   public static string? GetStyle(string state) => state switch
   {
@@ -24,6 +25,7 @@ public static class KnownRemoteResourceStates
     FailedToConnect => KnownResourceStateStyles.Error,
     InstallRemoteTools => KnownResourceStateStyles.Info,
     DeployingSidecar   => KnownResourceStateStyles.Info,
+    StartingSidecar    => KnownResourceStateStyles.Info,
     _ => null // Disconnected
   };
 
@@ -37,5 +39,6 @@ public static class KnownRemoteResourceStates
   public static readonly ResourceStateSnapshot ExitedSnapshot             = new(KnownResourceStates.Exited, null);
   public static readonly ResourceStateSnapshot InstallingToolsSnapshot    = new(InstallRemoteTools, GetStyle(InstallRemoteTools));
   public static readonly ResourceStateSnapshot DeployingSidecarSnapshot   = new(DeployingSidecar, GetStyle(DeployingSidecar));
+  public static readonly ResourceStateSnapshot StartingSidecarSnapshot    = new(StartingSidecar, GetStyle(StartingSidecar));
   public static readonly ResourceStateSnapshot FailedToInitializeSnapshot = new("Failed initialization", KnownResourceStateStyles.Error);
 }

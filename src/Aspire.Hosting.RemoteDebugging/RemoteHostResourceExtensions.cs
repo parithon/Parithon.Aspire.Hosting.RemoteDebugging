@@ -7,6 +7,7 @@ using Aspire.Hosting.RemoteDebugging.RemoteHost.HealthChecks;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting;
@@ -33,6 +34,7 @@ public static class RemoteHostResourceExtensions
     ArgumentNullException.ThrowIfNull(configure);
 
     builder.Services.TryAddEventingSubscriber<RemoteHostEventingSubscriber>();
+    builder.Services.AddHostedService<RemoteHostShutdownService>();
 
     var options = new RemoteHostOptions();
     configure(options);

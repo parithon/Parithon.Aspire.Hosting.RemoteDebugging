@@ -5,7 +5,8 @@ namespace Aspire.Hosting.RemoteDebugging.Sidecar.Infrastructure;
 
 /// <summary>
 /// Background service that monitors gRPC connectivity and triggers a graceful shutdown
-/// when the AppHost has been unreachable for longer than <see cref="SidecarOptions.ConnectionTimeout"/>.
+/// when the AppHost has been unreachable for longer than <see cref="SidecarOptions.ConnectionTimeout"/>
+/// <em>and</em> no managed child processes are running.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -17,11 +18,13 @@ namespace Aspire.Hosting.RemoteDebugging.Sidecar.Infrastructure;
 /// </list>
 /// </para>
 /// <para>
-/// <b>Timeout sequence:</b>
-/// <list type="number">
-///   <item>Save cached logs from all processes to a dump file.</item>
-///   <item>Stop all managed child processes.</item>
-///   <item>Call <see cref="IHostApplicationLifetime.StopApplication"/>.</item>
+/// <b>Timeout behaviour:</b>
+/// <list type="bullet">
+///   <item>Timeout elapsed + child processes still running → log a warning and stay alive.
+///         The sidecar re-checks every <c>CheckInterval</c> so it will self-terminate once
+///         all processes have exited, or resume normal operation if the AppHost reconnects.</item>
+///   <item>Timeout elapsed + no child processes → proceed with graceful shutdown:
+///         save cached logs, stop all processes, call <see cref="IHostApplicationLifetime.StopApplication"/>.</item>
 /// </list>
 /// </para>
 /// </remarks>
@@ -76,6 +79,17 @@ internal sealed class ConnectionMonitor(
     logger.LogDebug("Streaming ended. Active streams: {Count}.", _activeStreamCount);
   }
 
+  /// <summary>
+  /// Stops all managed processes, dumps cached logs, and requests application shutdown.
+  /// Called both by the inactivity timeout path and by the gRPC <c>Shutdown</c> RPC.
+  /// Returns <see langword="true"/> when all processes stopped without error.
+  /// </summary>
+  public async Task<bool> ShutdownAsync(CancellationToken cancellationToken = default)
+  {
+    logger.LogInformation("Graceful shutdown initiated.");
+    return await HandleShutdownAsync(cancellationToken).ConfigureAwait(false);
+  }
+
   // ── BackgroundService ─────────────────────────────────────────────────────
 
   protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -108,39 +122,43 @@ internal sealed class ConnectionMonitor(
       if (elapsed < options.Value.ConnectionTimeout)
         continue;
 
+      // Connection timeout has elapsed. If child processes are still running, keep the sidecar
+      // alive so their state is preserved for a potential AppHost reconnect. Re-check every
+      // interval — when all processes have exited the sidecar will self-terminate.
+      var runningProcesses = processManager.ListProcesses();
+      if (runningProcesses.Count > 0)
+      {
+        logger.LogWarning(
+          "AppHost appears disconnected (idle for {Elapsed:mm\\:ss}) but {Count} managed " +
+          "process(es) are still running — keeping sidecar alive for reconnect.",
+          elapsed, runningProcesses.Count);
+        continue;
+      }
+
       logger.LogError(
-        "No gRPC activity for {Elapsed:mm\\:ss} (threshold: {Timeout}). " +
-        "AppHost appears to be permanently disconnected.",
+        "No gRPC activity for {Elapsed:mm\\:ss} (threshold: {Timeout}) and no child " +
+        "processes are running. AppHost appears to be permanently disconnected. Shutting down.",
         elapsed, options.Value.ConnectionTimeout);
-      await HandleTimeoutAsync().ConfigureAwait(false);
+      await HandleShutdownAsync(CancellationToken.None).ConfigureAwait(false);
       return;
     }
   }
 
   // ── Private ───────────────────────────────────────────────────────────────
 
-  private async Task HandleTimeoutAsync()
+  private async Task<bool> HandleShutdownAsync(CancellationToken cancellationToken)
   {
-    var processes = processManager.GetAllProcesses();
-
     // 1. Dump cached logs to disk for post-mortem analysis.
-    await persistence.SaveAsync(processes).ConfigureAwait(false);
+    await persistence.SaveAsync(processManager.GetAllProcesses()).ConfigureAwait(false);
 
-    // 2. Stop all child processes.
-    foreach (var process in processes)
-    {
-      try
-      {
-        await process.StopAsync(CancellationToken.None).ConfigureAwait(false);
-      }
-      catch (Exception ex)
-      {
-        logger.LogWarning(ex, "Error stopping '{Name}' during timeout shutdown.", process.Name);
-      }
-    }
+    // 2. Stop and remove all child processes.
+    var stopped = await processManager.StopAllAsync(
+      cancellationToken == default ? CancellationToken.None : cancellationToken)
+      .ConfigureAwait(false);
 
     // 3. Shut down the sidecar itself.
-    logger.LogInformation("Connection timeout handled. Requesting application shutdown.");
+    logger.LogInformation("Shutdown complete ({Stopped} process(es) stopped). Requesting application shutdown.", stopped);
     lifetime.StopApplication();
+    return stopped >= 0; // StopAllAsync throws on hard failures; any return value here means "we tried"
   }
 }

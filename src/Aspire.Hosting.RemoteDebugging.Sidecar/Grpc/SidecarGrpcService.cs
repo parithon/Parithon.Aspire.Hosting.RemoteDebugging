@@ -148,4 +148,34 @@ internal sealed class SidecarGrpcService(
       logger.LogDebug("Log streaming ended for '{Name}'.", request.Name);
     }
   }
+
+  // ── Reset ─────────────────────────────────────────────────────────────────
+
+  public override async Task<ResetResponse> Reset(
+    ResetRequest request,
+    ServerCallContext context)
+  {
+    connectionMonitor.RecordActivity();
+    logger.LogInformation("Reset RPC received — stopping all processes from previous session.");
+
+    var stopped = await processManager.StopAllAsync(context.CancellationToken).ConfigureAwait(false);
+    logger.LogInformation("Reset complete: {Stopped} process(es) stopped.", stopped);
+
+    return new ResetResponse { ProcessesStopped = stopped };
+  }
+
+  // ── Shutdown ──────────────────────────────────────────────────────────────
+
+  public override async Task<ShutdownResponse> Shutdown(
+    ShutdownRequest request,
+    ServerCallContext context)
+  {
+    connectionMonitor.RecordActivity();
+    logger.LogInformation("Shutdown RPC received from AppHost.");
+
+    var success = await connectionMonitor.ShutdownAsync(context.CancellationToken)
+      .ConfigureAwait(false);
+
+    return new ShutdownResponse { Success = success };
+  }
 }

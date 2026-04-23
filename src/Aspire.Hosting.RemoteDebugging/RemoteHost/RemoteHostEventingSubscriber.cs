@@ -40,18 +40,7 @@ internal sealed class RemoteHostEventingSubscriber(ResourceNotificationService n
       return Task.CompletedTask;
     });
 
-    eventing.Subscribe<ResourceStoppedEvent>(async (@event, ct) =>
-    {
-      if (@event.Resource is not RemoteHostResource remoteHost)
-        return;
-
-      if (!remoteHost.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var annotation))
-        return;
-
-      await RemoteHostConnector.DisconnectAsync(remoteHost, notifications, loggers, ct);
-      annotation.Dispose();
-    });
-
     return Task.CompletedTask;
   }
 }
+

@@ -47,6 +47,32 @@ internal sealed class ProcessManagerService(
   }
 
   /// <inheritdoc/>
+  public async Task<int> StopAllAsync(CancellationToken cancellationToken)
+  {
+    var count = 0;
+    foreach (var key in _processes.Keys.ToList())
+    {
+      if (!_processes.TryRemove(key, out var process))
+        continue;
+
+      try
+      {
+        await process.StopAsync(cancellationToken).ConfigureAwait(false);
+        count++;
+      }
+      catch (Exception ex)
+      {
+        logger.LogWarning(ex, "Error stopping '{Name}' during StopAll.", process.Name);
+      }
+      finally
+      {
+        await process.DisposeAsync().ConfigureAwait(false);
+      }
+    }
+    return count;
+  }
+
+  /// <inheritdoc/>
   public async Task<bool> StopProcessAsync(string name, CancellationToken cancellationToken)
   {
     if (!_processes.TryGetValue(name, out var process))

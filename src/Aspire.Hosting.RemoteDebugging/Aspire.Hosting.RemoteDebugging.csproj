@@ -21,8 +21,18 @@
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting" Version="13.2.3" />
+    <PackageReference Include="Google.Protobuf" Version="3.33.5" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.76.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.76.0" PrivateAssets="All" />
     <PackageReference Include="MinVer" Version="6.0.0" PrivateAssets="All" />
     <PackageReference Include="SSH.NET" Version="2025.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Generate only the client-side stubs from the sidecar proto. -->
+    <Protobuf Include="..\Aspire.Hosting.RemoteDebugging.Sidecar\Protos\sidecar.proto"
+              GrpcServices="Client"
+              Access="Internal" />
   </ItemGroup>
 
   <ItemGroup>

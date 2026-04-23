@@ -8,12 +8,12 @@ namespace Aspire.Hosting.RemoteDebugging.RemoteHost;
 
 internal static class RemoteHostConnector
 {
-  internal static async Task ConnectAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken)
+  internal static async Task ConnectAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken, bool isReconnect = false)
   {
     await resource.ConnectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
     try
     {
-      await ConnectCoreAsync(resource, notifications, loggers, cancellationToken).ConfigureAwait(false);
+      await ConnectCoreAsync(resource, notifications, loggers, cancellationToken, isReconnect).ConfigureAwait(false);
     }
     finally
     {
@@ -21,7 +21,7 @@ internal static class RemoteHostConnector
     }
   }
 
-  private static async Task ConnectCoreAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken)
+  private static async Task ConnectCoreAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken, bool isReconnect = false)
   {
     var logger = loggers.GetLogger(resource);
 
@@ -54,23 +54,53 @@ internal static class RemoteHostConnector
       await transport.ConnectAsync(resource, logger, cancellationToken).ConfigureAwait(false);
       resource.Annotations.Add(new RemoteHostTransportAnnotation(transport));
 
-      // Deploy the sidecar agent to the remote host.
+      // Check whether the sidecar on the remote host is current, outdated, or absent.
+      var deploymentStatus = await transport.SidecarDeployedAsync(resource, cancellationToken)
+        .ConfigureAwait(false);
+
+      if (deploymentStatus == SidecarDeploymentStatus.UpToDate)
+      {
+        logger.LogDebug("Sidecar on remote host is up to date — skipping upload.");
+      }
+      else
+      {
+        if (deploymentStatus == SidecarDeploymentStatus.Outdated)
+        {
+          // A stale sidecar is present. If it is still running its DLL will be locked and the
+          // directory clean in DeployDirectoryAsync will fail. Shut it down gracefully first.
+          logger.LogInformation("Sidecar on remote host is outdated; shutting down any running instance before redeploying.");
+          await transport.ShutdownRunningSidecarAsync(resource, logger, cancellationToken)
+            .ConfigureAwait(false);
+        }
+
+        await notifications.PublishUpdateAsync(resource, s => s with
+        {
+          State = KnownRemoteResourceStates.DeployingSidecarSnapshot
+        }).ConfigureAwait(false);
+
+        var localSidecarDir = Path.Combine(AppContext.BaseDirectory, "sidecar");
+        if (!Directory.Exists(localSidecarDir))
+          throw new InvalidOperationException(
+            $"Sidecar directory not found at '{localSidecarDir}'. Ensure the Aspire.Hosting.RemoteDebugging package has been built.");
+
+        var remoteSidecarPath = $"{resource.DeploymentPath}/sidecar";
+        logger.LogInformation(
+          deploymentStatus == SidecarDeploymentStatus.Outdated
+            ? "Redeploying updated sidecar to {RemotePath}"
+            : "Deploying sidecar to {RemotePath}",
+          remoteSidecarPath);
+
+        await transport.DeployDirectoryAsync(localSidecarDir, remoteSidecarPath, logger, cancellationToken)
+          .ConfigureAwait(false);
+      }
+
+      // Start the sidecar process and establish the gRPC tunnel.
       await notifications.PublishUpdateAsync(resource, s => s with
       {
-        State = KnownRemoteResourceStates.DeployingSidecarSnapshot
+        State = KnownRemoteResourceStates.StartingSidecarSnapshot
       }).ConfigureAwait(false);
 
-      var localSidecarDir = Path.Combine(AppContext.BaseDirectory, "sidecar");
-      if (!Directory.Exists(localSidecarDir))
-        throw new InvalidOperationException(
-          $"Sidecar directory not found at '{localSidecarDir}'. Ensure the Aspire.Hosting.RemoteDebugging package has been built.");
-
-      var remoteSidecarPath = $"{resource.DeploymentPath}/sidecar";
-      if (logger.IsEnabled(LogLevel.Information))
-        logger.LogInformation("Deploying sidecar to {RemotePath}", remoteSidecarPath);
-
-      await transport.DeployDirectoryAsync(localSidecarDir, remoteSidecarPath, logger, cancellationToken)
-        .ConfigureAwait(false);
+      await transport.StartSidecarAsync(resource, logger, isReconnect, cancellationToken).ConfigureAwait(false);
 
       await notifications.PublishUpdateAsync(resource, s => s with
       {
@@ -186,7 +216,7 @@ internal static class RemoteHostConnector
           }).ConfigureAwait(false);
 
           await Task.Delay(TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false);
-          await ConnectAsync(resource, notifications, loggers, cancellationToken).ConfigureAwait(false);
+          await ConnectAsync(resource, notifications, loggers, cancellationToken, isReconnect: true).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
