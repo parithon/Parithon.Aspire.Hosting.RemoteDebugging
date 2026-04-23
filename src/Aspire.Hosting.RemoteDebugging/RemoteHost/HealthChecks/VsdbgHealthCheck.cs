@@ -1,23 +1,20 @@
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.RemoteDebugging.RemoteHost;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
-using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.RemoteDebugging.RemoteHost.HealthChecks;
 
-internal sealed class RemoteHostHealthCheck(RemoteHostResource resource, ILogger<RemoteHostHealthCheck> logger) : IHealthCheck
+internal sealed class VsdbgHealthCheck(RemoteHostResource resource, ILogger<VsdbgHealthCheck> logger) : IHealthCheck
 {
   public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken)
   {
-    // Always read the annotation fresh so reconnect/disconnect is reflected correctly.
     if (!resource.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var transportAnnotation) || transportAnnotation is null)
     {
       return HealthCheckResult.Unhealthy("Not connected to remote host.");
     }
 
-    var result = await transportAnnotation.Transport.CheckSidecarHealthAsync(logger, cancellationToken).ConfigureAwait(false);
+    var result = await transportAnnotation.Transport.CheckVsdbgHealthAsync(logger, cancellationToken).ConfigureAwait(false);
 
     return result.Status switch
     {

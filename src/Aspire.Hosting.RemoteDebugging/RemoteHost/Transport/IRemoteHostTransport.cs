@@ -65,7 +65,11 @@ internal interface IRemoteHostTransport : IDisposable
   /// </summary>
   Task StartSidecarAsync(RemoteHostResource resource, ILogger logger, bool isReconnect, CancellationToken cancellationToken);
 
-  Task<ResourceHealthCheckResult> CheckHealthAsync(ILogger logger, CancellationToken cancellationToken);
+  /// <summary>Pings the sidecar gRPC service and returns its health status.</summary>
+  Task<ResourceHealthCheckResult> CheckSidecarHealthAsync(ILogger logger, CancellationToken cancellationToken);
+
+  /// <summary>Checks the health of the vsdbg remote debugger process.</summary>
+  Task<ResourceHealthCheckResult> CheckVsdbgHealthAsync(ILogger logger, CancellationToken cancellationToken);
 
   /// <summary>
   /// Copies all files from <paramref name="localDirectory"/> to <paramref name="remoteDirectory"/>

@@ -584,38 +584,41 @@ internal sealed class SshTransport : IRemoteHostTransport
     }
   }
 
-  public async Task<ResourceHealthCheckResult> CheckHealthAsync(ILogger logger, CancellationToken cancellationToken)
+  public async Task<ResourceHealthCheckResult> CheckSidecarHealthAsync(ILogger logger, CancellationToken cancellationToken)
   {
     if (_client is null || !_client.IsConnected)
-      return ResourceHealthCheckResult.Unhealthy("SSH connection is not established");
+      return ResourceHealthCheckResult.Unhealthy("SSH connection is not established.");
 
-    if (_sidecarChannel is not null)
+    if (_sidecarChannel is null)
+      return ResourceHealthCheckResult.Unknown("Sidecar gRPC channel is not yet established.");
+
+    try
     {
-      try
-      {
-        var client = new SidecarService.SidecarServiceClient(_sidecarChannel);
-        var response = await client.PingAsync(
-          new PingRequest(),
-          deadline: DateTime.UtcNow.AddSeconds(5),
-          cancellationToken: cancellationToken).ConfigureAwait(false);
+      var client = new SidecarService.SidecarServiceClient(_sidecarChannel);
+      var response = await client.PingAsync(
+        new PingRequest(),
+        deadline: DateTime.UtcNow.AddSeconds(5),
+        cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        return ResourceHealthCheckResult.Healthy(
-          $"Sidecar healthy ({response.ActiveProcessCount} process(es) running)");
-      }
-      catch (RpcException ex)
-      {
-        return ResourceHealthCheckResult.Unhealthy($"Sidecar ping failed: {ex.Status.Detail}");
-      }
+      return ResourceHealthCheckResult.Healthy(
+        $"Sidecar healthy ({response.ActiveProcessCount} process(es) running).");
     }
+    catch (RpcException ex)
+    {
+      return ResourceHealthCheckResult.Unhealthy($"Sidecar ping failed: {ex.Status.Detail}");
+    }
+  }
 
+  public Task<ResourceHealthCheckResult> CheckVsdbgHealthAsync(ILogger logger, CancellationToken cancellationToken)
+  {
     if (_vsdbgCommand is null || _vsdbgAsyncResult is null)
-      return ResourceHealthCheckResult.Unknown("vsdbg has not been started yet");
+      return Task.FromResult(ResourceHealthCheckResult.Unknown("vsdbg has not been started yet."));
 
     if (_vsdbgAsyncResult.IsCompleted)
-      return ResourceHealthCheckResult.Unhealthy("vsdbg has exited");
+      return Task.FromResult(ResourceHealthCheckResult.Unhealthy("vsdbg has exited."));
 
     var uptime = DateTime.UtcNow - _vsdbgStartTime;
-    return ResourceHealthCheckResult.Healthy($"vsdbg running for {uptime.TotalSeconds:F0}s");
+    return Task.FromResult(ResourceHealthCheckResult.Healthy($"vsdbg running for {uptime.TotalSeconds:F0}s."));
   }
 
   public void Dispose()

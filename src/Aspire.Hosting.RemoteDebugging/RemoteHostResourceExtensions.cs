@@ -64,12 +64,22 @@ public static class RemoteHostResourceExtensions
 
     var resource = builder.AddResource(remoteHost);
 
-    // Register the health check with Aspire's health check service so it
-    // appears in the dashboard "Health checks" section.
-    var healthCheckKey = $"{name}-vsdbg";
+    // Register two health checks so each component is visible separately in the dashboard.
+    var sidecarHealthCheckKey = $"{name}-sidecar";
     builder.Services.AddHealthChecks().Add(new HealthCheckRegistration(
-      healthCheckKey,
+      sidecarHealthCheckKey,
       sp => new RemoteHostHealthCheck(remoteHost, sp.GetRequiredService<ILoggerFactory>().CreateLogger<RemoteHostHealthCheck>()),
+      failureStatus: null,
+      tags: null)
+    {
+      Delay = TimeSpan.FromSeconds(5),
+      Period = TimeSpan.FromSeconds(30)
+    });
+
+    var vsdbgHealthCheckKey = $"{name}-vsdbg";
+    builder.Services.AddHealthChecks().Add(new HealthCheckRegistration(
+      vsdbgHealthCheckKey,
+      sp => new VsdbgHealthCheck(remoteHost, sp.GetRequiredService<ILoggerFactory>().CreateLogger<VsdbgHealthCheck>()),
       failureStatus: null,
       tags: null)
     {
@@ -103,7 +113,8 @@ public static class RemoteHostResourceExtensions
         Properties = []
       })
       .WithAnnotation(platformAnnotation)
-      .WithAnnotation(new HealthCheckAnnotation(healthCheckKey))
+      .WithAnnotation(new HealthCheckAnnotation(sidecarHealthCheckKey))
+      .WithAnnotation(new HealthCheckAnnotation(vsdbgHealthCheckKey))
       .WithCommand(name: "connect", displayName: "Connect", executeCommand: async context =>
       {
         var notifications = context.ServiceProvider.GetRequiredService<ResourceNotificationService>();
