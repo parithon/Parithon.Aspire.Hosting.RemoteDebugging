@@ -8,45 +8,11 @@
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting" Version="13.2.3" />
-    <PackageReference Include="Google.Protobuf" Version="3.33.5" />
-    <PackageReference Include="Grpc.Net.Client" Version="2.76.0" />
-    <PackageReference Include="Grpc.Tools" Version="2.76.0" PrivateAssets="All" />
     <PackageReference Include="SSH.NET" Version="2025.1.0" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- Generate gRPC client stubs only — server stubs live in the sidecar project. -->
-    <Protobuf Include="..\Aspire.Hosting.RemoteDebugging.Sidecar\Protos\sidecar.proto"
-              GrpcServices="Client"
-              Link="Protos\sidecar.proto" />
   </ItemGroup>
 
   <ItemGroup>
     <Folder Include="RemoteProject/Annotations/" />
   </ItemGroup>
-
-  <PropertyGroup>
-    <SidecarCsproj>$(MSBuildThisFileDirectory)..\Aspire.Hosting.RemoteDebugging.Sidecar\Aspire.Hosting.RemoteDebugging.Sidecar.csproj</SidecarCsproj>
-    <SidecarPublishDir>$(MSBuildThisFileDirectory)obj\sidecar-publish\</SidecarPublishDir>
-  </PropertyGroup>
-
-  <!--
-    Step 1: Publish the sidecar app into obj\sidecar-publish\ very early in the build.
-    Step 2: Embed every published file as a manifest resource under the 'aspire-sidecar/' prefix.
-            The wildcard picks up the sidecar DLL, its dependencies, runtimeconfig, and deps.json.
-    Both steps must be in one target so the ItemGroup additions happen in the same target
-    context that PrepareResourceNames will see.
-  -->
-  <Target Name="PublishAndEmbedSidecar" BeforeTargets="SplitResourcesByCulture">
-    <MSBuild Projects="$(SidecarCsproj)"
-             Targets="Publish"
-             Properties="PublishDir=$(SidecarPublishDir);SelfContained=false;UseAppHost=false;Configuration=$(Configuration)" />
-    <ItemGroup>
-      <_SidecarPublished Include="$(SidecarPublishDir)*" />
-      <EmbeddedResource Include="@(_SidecarPublished)">
-        <LogicalName>aspire-sidecar/%(Filename)%(Extension)</LogicalName>
-      </EmbeddedResource>
-    </ItemGroup>
-  </Target>
 
 </Project>

@@ -23,23 +23,4 @@ internal interface IRemoteHostTransport : IDisposable
   /// on the remote host over SFTP. The remote directory is cleaned before upload to prevent stale artifacts.
   /// </summary>
   Task DeployDirectoryAsync(string localDirectory, string remoteDirectory, ILogger logger, CancellationToken cancellationToken);
-
-  /// <summary>
-  /// Copies the aspire-sidecar artifacts from <paramref name="localSidecarDir"/> into the
-  /// remote tools directory alongside vsdbg. Does not remove existing files.
-  /// </summary>
-  Task DeploySidecarAsync(string localSidecarDir, ILogger logger, CancellationToken cancellationToken);
-
-  /// <summary>
-  /// Starts the aspire-sidecar daemon on the remote host as a background process.
-  /// If the daemon is already running the call is a no-op and returns <see langword="true"/>.
-  /// Returns <see langword="false"/> if the daemon could not be started.
-  /// </summary>
-  Task<bool> StartSidecarDaemonAsync(ILogger logger, CancellationToken cancellationToken);
-
-  /// <summary>
-  /// Returns a health check result indicating whether the aspire-sidecar daemon is running
-  /// on the remote host. Uses a lightweight SFTP socket-file existence check.
-  /// </summary>
-  Task<ResourceHealthCheckResult> CheckSidecarHealthAsync(ILogger logger, CancellationToken cancellationToken);
 }

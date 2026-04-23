@@ -15,7 +15,7 @@ public sealed class RemoteHostResource(string name)
   public int? Port { get; set; }
 
   /// <summary>
-  /// The path on the remote host where tools (vsdbg, aspire-sidecar) are installed and run from.
+  /// The path on the remote host where tools (vsdbg) are installed and run from.
   /// When <see langword="null"/>, a platform-appropriate default is used:
   /// Windows → <c>%LOCALAPPDATA%\Microsoft\vsdbg</c>, Linux → <c>~/.vsdbg</c>.
   /// </summary>

@@ -6,6 +6,5 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Aspire.Hosting.RemoteDebugging/Aspire.Hosting.RemoteDebugging.csproj" />
-    <Project Path="src/Aspire.Hosting.RemoteDebugging.Sidecar/Aspire.Hosting.RemoteDebugging.Sidecar.csproj" />
   </Folder>
 </Solution>

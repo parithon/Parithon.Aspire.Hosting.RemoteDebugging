@@ -75,17 +75,6 @@ public static class RemoteHostResourceExtensions
       Period = TimeSpan.FromSeconds(30)
     });
 
-    var sidecarHealthCheckKey = $"{name}-sidecar";
-    builder.Services.AddHealthChecks().Add(new HealthCheckRegistration(
-      sidecarHealthCheckKey,
-      sp => new RemoteSidecarHealthCheck(remoteHost, sp.GetRequiredService<ILoggerFactory>().CreateLogger<RemoteSidecarHealthCheck>()),
-      failureStatus: null,
-      tags: null)
-    {
-      Delay = TimeSpan.FromSeconds(10),
-      Period = TimeSpan.FromSeconds(30)
-    });
-
     if (options.Credential.Password is not null)
     {
       resource.WithReferenceRelationship(options.Credential.Password);
@@ -113,7 +102,6 @@ public static class RemoteHostResourceExtensions
       })
       .WithAnnotation(platformAnnotation)
       .WithAnnotation(new HealthCheckAnnotation(healthCheckKey))
-      .WithAnnotation(new HealthCheckAnnotation(sidecarHealthCheckKey))
       .WithCommand(name: "connect", displayName: "Connect", executeCommand: async context =>
       {
         var notifications = context.ServiceProvider.GetRequiredService<ResourceNotificationService>();
@@ -287,7 +275,7 @@ public static class RemoteHostResourceExtensions
   }
 
   /// <summary>
-  /// Sets the path on the remote host where tools (vsdbg, aspire-sidecar) are installed and run from.
+  /// Sets the path on the remote host where tools (vsdbg) are installed and run from.
   /// </summary>
   public static IResourceBuilder<RemoteHostResource> WithRemoteToolsPath(this IResourceBuilder<RemoteHostResource> builder, string path)
   {

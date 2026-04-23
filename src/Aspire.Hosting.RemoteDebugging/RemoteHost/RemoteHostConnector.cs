@@ -71,19 +71,6 @@ internal static class RemoteHostConnector
         return;
       }
 
-      // Deploy the aspire-sidecar alongside vsdbg, then start the daemon.
-      try
-      {
-        var sidecarDir = SidecarExtractor.ExtractToTempDirectory();
-        await transport.DeploySidecarAsync(sidecarDir, logger, cancellationToken).ConfigureAwait(false);
-        await transport.StartSidecarDaemonAsync(logger, cancellationToken).ConfigureAwait(false);
-      }
-      catch (Exception ex)
-      {
-        // Sidecar deployment is non-fatal; log and continue.
-        logger.LogWarning(ex, "Failed to deploy or start aspire-sidecar. Continuing without it.");
-      }
-
       // Subscribe to transport events BEFORE starting vsdbg so no exit event is missed.
       SubscribeTransportEvents(transport, resource, notifications, loggers, cancellationToken);
 

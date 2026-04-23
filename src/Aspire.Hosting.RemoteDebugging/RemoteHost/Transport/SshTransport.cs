@@ -3,8 +3,6 @@ using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.RemoteDebugging.RemoteHost;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.HealthChecks;
-using Aspire.Hosting.RemoteDebugging.Sidecar.Proto;
-using Grpc.Net.Client;
 using Microsoft.Extensions.Logging;
 using Renci.SshNet;
 using Renci.SshNet.Common;
@@ -25,9 +23,6 @@ internal sealed class SshTransport : IRemoteHostTransport
   private SshCommand? _vsdbgCommand;
   private IAsyncResult? _vsdbgAsyncResult;
   private DateTime _vsdbgStartTime;
-  // SSH port-forward that tunnels gRPC: local 127.0.0.1:5055 → remote 127.0.0.1:5055
-  private ForwardedPortLocal? _sidecarPortForward;
-  private const int SidecarPort = 5055;
 
   public event EventHandler? ConnectionDropped;
   public event EventHandler? RemoteDebuggerExited;
@@ -343,140 +338,10 @@ internal sealed class SshTransport : IRemoteHostTransport
 
   public void Dispose()
   {
-    if (_sidecarPortForward is not null)
-    {
-      try { _sidecarPortForward.Stop(); } catch { /* best-effort */ }
-      _client?.RemoveForwardedPort(_sidecarPortForward);
-      _sidecarPortForward.Dispose();
-      _sidecarPortForward = null;
-    }
     _sftpClient?.Dispose();
     _sftpClient = null;
     _client?.Dispose();
     _client = null;
-  }
-
-  public async Task DeploySidecarAsync(string localSidecarDir, ILogger logger, CancellationToken cancellationToken)
-  {
-    if (_sftpClient is null || !_sftpClient.IsConnected)
-      throw new InvalidOperationException("SFTP client is not connected.");
-    if (_resource is null)
-      throw new InvalidOperationException("Remote host resource is null.");
-    if (!_resource.TryGetLastAnnotation<RemoteHostOSPlatformAnnotation>(out var platformAnnotation) || platformAnnotation is null)
-      throw new InvalidOperationException("Could not determine remote platform.");
-
-    // GetRemoteToolsPath returns shell-expression strings (e.g. $env:LOCALAPPDATA, ~).
-    // SFTP speaks the file protocol directly — no shell expansion happens.
-    // Resolve the real path by running an echo command over SSH first.
-    var remoteDir = ToSftpPath(await ResolveRemoteToolsPathAsync(platformAnnotation.Platform, cancellationToken).ConfigureAwait(false));
-
-    if (!_sftpClient.Exists(remoteDir))
-    {
-      logger.LogDebug("Creating remote tools directory: {RemoteDir}", remoteDir);
-      _sftpClient.CreateDirectory(remoteDir);
-    }
-
-    foreach (var file in Directory.EnumerateFiles(localSidecarDir))
-    {
-      cancellationToken.ThrowIfCancellationRequested();
-      var remotePath = $"{remoteDir}/{Path.GetFileName(file)}";
-      logger.LogDebug("Uploading sidecar file: {RemotePath}", remotePath);
-      await using var stream = File.OpenRead(file);
-      await _sftpClient.UploadFileAsync(stream, remotePath, cancellationToken).ConfigureAwait(false);
-    }
-
-    logger.LogInformation("aspire-sidecar deployed to {RemoteDir}", remoteDir);
-  }
-
-  public async Task<bool> StartSidecarDaemonAsync(ILogger logger, CancellationToken cancellationToken)
-  {
-    if (_client is null || _resource is null)
-      return false;
-    if (!_resource.TryGetLastAnnotation<RemoteHostOSPlatformAnnotation>(out var platformAnnotation) || platformAnnotation is null)
-      return false;
-
-    var toolsPath = await ResolveRemoteToolsPathAsync(platformAnnotation.Platform, cancellationToken).ConfigureAwait(false);
-    var dllPath   = platformAnnotation.Platform == OSPlatform.Windows
-      ? $"{toolsPath}\\aspire-sidecar.dll"
-      : $"{toolsPath}/aspire-sidecar.dll";
-
-    // Check whether the daemon is already listening on port 5055 before launching.
-    string portCheckCmd;
-    string startCmd;
-
-    if (platformAnnotation.Platform == OSPlatform.Linux)
-    {
-      portCheckCmd = $"ss -tlnp 2>/dev/null | grep -q ':{SidecarPort}' && echo running || echo stopped";
-      startCmd     = $"nohup dotnet '{dllPath}' daemon </dev/null >/dev/null 2>&1 &";
-    }
-    else if (platformAnnotation.Platform == OSPlatform.Windows)
-    {
-      // PowerShell — single-quoted paths, no shell variable expansion.
-      portCheckCmd = _shell == "cmd.exe"
-        ? $"netstat -ano | findstr /C:\":{SidecarPort}\" | findstr LISTENING > nul 2>&1 && echo running || echo stopped"
-        : $"if(Get-NetTCPConnection -LocalPort {SidecarPort} -State Listen -ErrorAction SilentlyContinue){{'running'}}else{{'stopped'}}";
-      startCmd = _shell == "cmd.exe"
-        ? $"start /B dotnet \"{dllPath}\" daemon"
-        : $"Start-Process -WindowStyle Hidden -FilePath dotnet -ArgumentList '{dllPath}','daemon'";
-    }
-    else
-    {
-      throw new PlatformNotSupportedException($"Platform '{platformAnnotation.Platform}' is not supported.");
-    }
-
-    var (shell, shellArgs) = GetShell(platformAnnotation.Platform);
-
-    // If not already running, start the daemon.
-    using var checkCmd = _client.CreateCommand($"{shell} {shellArgs} \"{portCheckCmd}\"");
-    await Task.Factory.FromAsync(checkCmd.BeginExecute(), checkCmd.EndExecute).ConfigureAwait(false);
-
-    if (checkCmd.Result?.Trim() != "running")
-    {
-      using var launchCmd = _client.CreateCommand($"{shell} {shellArgs} \"{startCmd}\"");
-      await Task.Factory.FromAsync(launchCmd.BeginExecute(), launchCmd.EndExecute).ConfigureAwait(false);
-
-      if (launchCmd.ExitStatus != 0)
-      {
-        logger.LogWarning("aspire-sidecar launch returned exit code {Code}. {Error}", launchCmd.ExitStatus, launchCmd.Error?.Trim());
-        return false;
-      }
-
-      // Give the daemon a moment to bind its port.
-      await Task.Delay(1_500, cancellationToken).ConfigureAwait(false);
-    }
-
-    // Set up (or re-use) the SSH port forward so the AppHost can reach the gRPC server.
-    if (_sidecarPortForward is null)
-    {
-      _sidecarPortForward = new ForwardedPortLocal("127.0.0.1", SidecarPort, "127.0.0.1", SidecarPort);
-      _client.AddForwardedPort(_sidecarPortForward);
-    }
-
-    if (!_sidecarPortForward.IsStarted)
-      _sidecarPortForward.Start();
-
-    logger.LogInformation("aspire-sidecar daemon started (or already running). SSH tunnel active on port {Port}.", SidecarPort);
-    return true;
-  }
-
-  public async Task<ResourceHealthCheckResult> CheckSidecarHealthAsync(ILogger logger, CancellationToken cancellationToken)
-  {
-    if (_sidecarPortForward is null || !_sidecarPortForward.IsStarted)
-      return ResourceHealthCheckResult.Unhealthy("aspire-sidecar port forward is not active");
-
-    try
-    {
-      using var channel = GrpcChannel.ForAddress($"http://127.0.0.1:{SidecarPort}");
-      var client = new SidecarService.SidecarServiceClient(channel);
-      var deadline = DateTime.UtcNow.AddSeconds(5);
-      var reply    = await client.PingAsync(new PingRequest(), deadline: deadline, cancellationToken: cancellationToken).ConfigureAwait(false);
-      return ResourceHealthCheckResult.Healthy($"aspire-sidecar v{reply.Version} is running");
-    }
-    catch (Exception ex)
-    {
-      logger.LogDebug(ex, "aspire-sidecar gRPC Ping failed");
-      return ResourceHealthCheckResult.Unhealthy($"aspire-sidecar gRPC Ping failed: {ex.Message}");
-    }
   }
 
   public async Task DeployDirectoryAsync(string localDirectory, string remoteDirectory, ILogger logger, CancellationToken cancellationToken)

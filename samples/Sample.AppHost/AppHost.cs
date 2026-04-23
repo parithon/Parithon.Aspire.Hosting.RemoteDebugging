@@ -11,6 +11,6 @@ var windev = builder.AddRemoteHost("win-dev", OSPlatform.Windows, new("loadmin",
 
 builder.AddRemoteProject<Sample_WorkerApp>("remote-worker", windev);
 
-builder.AddProject<Sample_WorkerApp>("local-worker");
+// builder.AddProject<Sample_WorkerApp>("local-worker");
 
 builder.Build().Run();
