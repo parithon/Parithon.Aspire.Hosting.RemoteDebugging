@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "Aspire.Hosting.RemoteDebugging.Sidecar";
+
+package sidecar.v1;
+
+// SidecarService manages the lifecycle of .NET child processes on the remote host and streams
+// their stdout/stderr back to the AppHost over a persistent gRPC connection.
+service SidecarService {
+  // Health check.  Clients should call this every ~30 s to reset the inactivity timer.
+  rpc Ping(PingRequest) returns (PingResponse);
+
+  // Deploy and start a managed .NET process on the remote host.
+  rpc StartProcess(StartProcessRequest) returns (StartProcessResponse);
+
+  // Stop a managed process by logical name.
+  rpc StopProcess(StopProcessRequest) returns (StopProcessResponse);
+
+  // Enumerate all managed processes and their current states.
+  rpc ListProcesses(ListProcessesRequest) returns (ListProcessesResponse);
+
+  // Stream stdout/stderr from a managed process.  Optionally replays cached lines first,
+  // then delivers live output until the client cancels the call.
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogLine);
+}
+
+// ── Ping ─────────────────────────────────────────────────────────────────────
+
+message PingRequest {}
+
+message PingResponse {
+  string version              = 1;
+  int32  active_process_count = 2;
+}
+
+// ── StartProcess ─────────────────────────────────────────────────────────────
+
+message StartProcessRequest {
+  // Logical name that identifies the process (matches the Aspire resource name).
+  string name              = 1;
+  string working_directory = 2;
+  // Entry-point DLL filename, e.g. "MyApp.dll". Invoked as `dotnet <entry_point>`.
+  string entry_point       = 3;
+  // Environment variables to inject into the child process.
+  map<string, string> environment = 4;
+}
+
+message StartProcessResponse {
+  int64 pid             = 1;
+  // True when the process was already running; no new process was spawned.
+  bool  already_running = 2;
+}
+
+// ── StopProcess ──────────────────────────────────────────────────────────────
+
+message StopProcessRequest {
+  string name = 1;
+}
+
+message StopProcessResponse {
+  bool success = 1;
+}
+
+// ── ListProcesses ────────────────────────────────────────────────────────────
+
+message ListProcessesRequest {}
+
+message ProcessInfo {
+  string name  = 1;
+  int64  pid   = 2;
+  // String representation of ProcessState enum (e.g. "Running", "Stopped").
+  string state = 3;
+}
+
+message ListProcessesResponse {
+  repeated ProcessInfo processes = 1;
+}
+
+// ── StreamLogs ───────────────────────────────────────────────────────────────
+
+message StreamLogsRequest {
+  string name          = 1;
+  // When true the server replays all cached log lines before streaming live output.
+  bool   replay_cached = 2;
+}
+
+message LogLine {
+  google.protobuf.Timestamp timestamp = 1;
+  string content  = 2;
+  bool   is_error = 3;
+}

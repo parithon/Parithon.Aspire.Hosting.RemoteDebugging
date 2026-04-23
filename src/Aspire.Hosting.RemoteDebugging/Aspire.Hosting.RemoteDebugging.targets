@@ -1,0 +1,23 @@
+<Project>
+
+  <!--
+    Copies the bundled sidecar publish output from the NuGet package into the
+    consuming project's output directory under a 'sidecar/' subdirectory.
+    This makes the sidecar available at runtime so RemoteHostConnector can
+    locate and deploy it to a RemoteHostResource over SSH.
+  -->
+
+  <PropertyGroup>
+    <_SidecarPackageSourceDir>$(MSBuildThisFileDirectory)..\tools\sidecar\</_SidecarPackageSourceDir>
+  </PropertyGroup>
+
+  <Target Name="CopySidecarToOutput" AfterTargets="Build">
+    <ItemGroup>
+      <_SidecarFiles Include="$(_SidecarPackageSourceDir)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_SidecarFiles)"
+          DestinationFiles="@(_SidecarFiles->'$(OutputPath)sidecar\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>
