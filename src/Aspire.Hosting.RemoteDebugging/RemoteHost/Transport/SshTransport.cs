@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.RemoteDebugging.RemoteHost;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
@@ -31,8 +32,6 @@ internal sealed class SshTransport : IRemoteHostTransport
   private DateTime _vsdbgStartTime;
 
   private ForwardedPortLocal? _sidecarPortForward;
-  private SshCommand? _sidecarCommand;
-  private CancellationTokenSource? _sidecarOutputCts;
   private GrpcChannel? _sidecarChannel;
 
   public event EventHandler? ConnectionDropped;
@@ -170,43 +169,41 @@ internal sealed class SshTransport : IRemoteHostTransport
     }
   }
 
-  public async Task DisconnectAsync(ILogger logger, CancellationToken cancellationToken)
+  public async Task DisconnectAsync(ILogger logger, CancellationToken cancellationToken, bool sendShutdown = false)
   {
     // Mark as terminal before disconnecting so the ErrorOccurred / BeginExecute
     // callbacks do not raise unexpected-exit events.
     Interlocked.Exchange(ref _disconnected, 1);
 
-    // Gracefully tell the sidecar to stop all managed processes and shut down.
-    // Best-effort: give it 10 seconds, then fall back to direct SSH command cancellation.
-    // Use a standalone timeout CTS — do NOT link to cancellationToken because the host's
-    // lifetime token is already cancelled by the time aspire stop fires this path.
     if (_sidecarChannel is not null)
     {
-      try
+      if (sendShutdown)
       {
-        using var shutdownCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var client = new SidecarService.SidecarServiceClient(_sidecarChannel);
-        await client.ShutdownAsync(new ShutdownRequest(), cancellationToken: shutdownCts.Token)
-          .ConfigureAwait(false);
-        logger.LogDebug("Sidecar shutdown RPC completed successfully.");
+        // Explicit disconnect: gracefully tell the sidecar to stop all managed processes and exit.
+        // Use a standalone timeout CTS — do NOT link to cancellationToken because the host's
+        // lifetime token may already be cancelled.
+        try
+        {
+          using var shutdownCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+          var client = new SidecarService.SidecarServiceClient(_sidecarChannel);
+          await client.ShutdownAsync(new ShutdownRequest(), cancellationToken: shutdownCts.Token)
+            .ConfigureAwait(false);
+          logger.LogDebug("Sidecar shutdown RPC completed successfully.");
+        }
+        catch (Exception ex)
+        {
+          logger.LogWarning(ex, "Sidecar shutdown RPC failed; the SSH command will be cancelled.");
+        }
       }
-      catch (Exception ex)
+      else
       {
-        logger.LogWarning(ex, "Sidecar shutdown RPC failed; the SSH command will be cancelled.");
+        // AppHost exit / restart: leave the sidecar and its processes running so a restarted
+        // AppHost can reconnect via TryReconnectAsync. Only close the local tunnel.
+        logger.LogDebug("AppHost exiting: closing SSH tunnel without shutting down sidecar.");
       }
-      finally
-      {
-        // Cancel the stdout pump, then close the SSH channel. StopApplication() inside the
-        // RPC is async — the dotnet process may still be alive when the RPC returns. Closing
-        // the SSH channel sends SIGHUP to the remote process, ensuring it is actually killed.
-        _sidecarOutputCts?.Cancel();
-        _sidecarCommand?.CancelAsync();
-      }
-    }
-    else
-    {
-      _sidecarOutputCts?.Cancel();
-      _sidecarCommand?.CancelAsync();
+
+      // Sidecar was launched as a detached process; closing the SSH session does not kill it.
+
     }
 
     // TODO: Close the vsdbg agent
@@ -358,6 +355,25 @@ internal sealed class SshTransport : IRemoteHostTransport
     return Task.FromResult(upToDate ? SidecarDeploymentStatus.UpToDate : SidecarDeploymentStatus.Outdated);
   }
 
+  public Task<bool> IsProjectCurrentAsync(string localDllPath, string remoteDllPath, CancellationToken cancellationToken)
+  {
+    if (_sftpClient is null || !_sftpClient.IsConnected)
+      return Task.FromResult(false);
+
+    var sftpPath = ToSftpPath(remoteDllPath);
+    if (!_sftpClient.Exists(sftpPath))
+      return Task.FromResult(false);
+
+    if (!File.Exists(localDllPath))
+      return Task.FromResult(false);
+
+    var localTime  = File.GetLastWriteTimeUtc(localDllPath);
+    var remoteTime = _sftpClient.Get(sftpPath).LastWriteTimeUtc;
+    var upToDate   = Math.Abs((localTime - remoteTime).TotalSeconds) <= 2;
+
+    return Task.FromResult(upToDate);
+  }
+
   public async Task ShutdownRunningSidecarAsync(RemoteHostResource resource, ILogger logger, CancellationToken cancellationToken)
   {
     if (_client is null)
@@ -447,9 +463,7 @@ internal sealed class SshTransport : IRemoteHostTransport
     _client.AddForwardedPort(_sidecarPortForward);
     _sidecarPortForward.Start();
     var localPort = _sidecarPortForward.BoundPort;
-
-    if (logger.IsEnabled(LogLevel.Debug))
-      logger.LogDebug("SSH port forward established: localhost:{LocalPort} → remote:{SidecarPort}", localPort, SidecarPort);
+    logger.LogInformation("SSH port forward established: localhost:{LocalPort} → remote:{SidecarPort}", localPort, SidecarPort);
 
     // Create the gRPC channel over the SSH tunnel (used whether we reconnect or start fresh).
     _sidecarChannel = GrpcChannel.ForAddress($"http://127.0.0.1:{localPort}");
@@ -476,49 +490,30 @@ internal sealed class SshTransport : IRemoteHostTransport
 
     if (pingResponse is not null)
     {
-      if (isReconnect)
-      {
-        // SSH dropped and was re-established. The sidecar and its managed processes are still
-        // running. Do NOT reset — callers will re-subscribe to StreamLogs(replay_cached: true)
-        // to retrieve any output produced while the AppHost was offline.
-        logger.LogInformation(
-          "Reconnected to existing sidecar ({Count} process(es) still running).",
-          pingResponse.ActiveProcessCount);
-      }
-      else
-      {
-        // Fresh AppHost session. Stop any processes left over from the previous session.
-        var resetResponse = await client.ResetAsync(new ResetRequest(), cancellationToken: cancellationToken)
-          .ConfigureAwait(false);
-        logger.LogInformation(
-          "Sidecar reset: {Stopped} previous process(es) stopped.",
-          resetResponse.ProcessesStopped);
-      }
+      // Sidecar is already running — either an SSH reconnect within the same session, or
+      // the AppHost was restarted without a Shutdown. In both cases, leave processes intact;
+      // TryReconnectAsync will decide per-project whether to re-attach or stop + rebuild.
+      logger.LogInformation(
+        isReconnect
+          ? "Reconnected to existing sidecar ({Count} process(es) still running)."
+          : "Sidecar still running from previous session ({Count} process(es)); skipping reset.",
+        pingResponse.ActiveProcessCount);
       return;
     }
 
-    // Sidecar is not running — start it now.
+    // Sidecar is not running — launch it as a detached process so it survives SSH session close.
+    // A foreground SSH command would be killed when the AppHost exits and the session closes;
+    // a detached process persists and is reconnected to on the next AppHost start.
     var sidecarDll = $"{resource.DeploymentPath}/sidecar/aspire-sidecar.dll";
-    var (shell, shellArgs) = GetShell(platformAnnotation.Platform);
-    _sidecarCommand = _client.CreateCommand($"{shell} {shellArgs} \"dotnet {sidecarDll}\"");
-
-    var capturedCommand = _sidecarCommand;
-    capturedCommand.BeginExecute(ar =>
-    {
-      try { capturedCommand.EndExecute(ar); }
-      catch (Exception ex)
-      {
-        logger.LogWarning(ex, "Sidecar process exited unexpectedly.");
-      }
-
-      if (Interlocked.CompareExchange(ref _disconnected, 0, 0) == 0)
-        logger.LogWarning("Sidecar process has stopped on the remote host.");
-    }, null);
-
-    // Pump stdout from the remote sidecar process into the AppHost dashboard log.
-    // The CTS lets DisconnectAsync cancel the pump after the SSH command is cancelled.
-    _sidecarOutputCts = new CancellationTokenSource();
-    _ = PumpSidecarOutputAsync(capturedCommand, logger, _sidecarOutputCts.Token);
+    var detachCmd = BuildDetachedLaunchCommand(platformAnnotation.Platform, sidecarDll);
+    logger.LogInformation("Launching sidecar via detached process.");
+    using var startCmd = _client.CreateCommand(detachCmd);
+    var startOutput = await Task.Factory.FromAsync(startCmd.BeginExecute(), startCmd.EndExecute).ConfigureAwait(false);
+    if (startCmd.ExitStatus != 0 || !string.IsNullOrWhiteSpace(startCmd.Error))
+      logger.LogWarning("Detached sidecar launch — exit code {Code}, stdout: '{Out}', stderr: '{Err}'",
+        startCmd.ExitStatus, startOutput?.Trim(), startCmd.Error?.Trim());
+    else if (!string.IsNullOrWhiteSpace(startOutput))
+      logger.LogDebug("Detached sidecar launch stdout: {Out}", startOutput.Trim());
 
     logger.LogInformation("Sidecar process started; waiting for gRPC readiness on localhost:{LocalPort}", localPort);
 
@@ -545,43 +540,6 @@ internal sealed class SshTransport : IRemoteHostTransport
 
     throw new TimeoutException(
       $"Sidecar did not become ready within {SidecarReadyTimeoutSeconds} seconds on localhost:{localPort}.");
-  }
-
-  /// <summary>
-  /// Reads stdout from the remote sidecar SSH command and forwards each line to the
-  /// dashboard logger, mapping Serilog level tags ([INF]/[WRN]/[ERR]/[FTL]) to the
-  /// corresponding <see cref="ILogger"/> severity so lines appear correctly coloured
-  /// in the Aspire dashboard.
-  /// </summary>
-  private static async Task PumpSidecarOutputAsync(SshCommand command, ILogger logger, CancellationToken cancellationToken)
-  {
-    try
-    {
-      using var reader = new StreamReader(command.OutputStream);
-      while (!cancellationToken.IsCancellationRequested)
-      {
-        var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-        if (line is null)
-          break; // stream closed — sidecar process ended
-
-        // Map the Serilog 3-char level tag to the ILogger level so the dashboard
-        // colours warnings/errors appropriately.
-        if (line.Contains("[ERR]") || line.Contains("[FTL]"))
-          logger.LogError("{Line}", line);
-        else if (line.Contains("[WRN]"))
-          logger.LogWarning("{Line}", line);
-        else
-          logger.LogInformation("{Line}", line);
-      }
-    }
-    catch (OperationCanceledException)
-    {
-      // Normal cancellation on disconnect — nothing to report.
-    }
-    catch (Exception ex)
-    {
-      logger.LogWarning(ex, "Sidecar stdout pump stopped unexpectedly.");
-    }
   }
 
   public async Task<ResourceHealthCheckResult> CheckSidecarHealthAsync(ILogger logger, CancellationToken cancellationToken)
@@ -675,6 +633,11 @@ internal sealed class SshTransport : IRemoteHostTransport
       logger.LogDebug("Uploading {File}", remotFile);
       await using var stream = file.OpenRead();
       await sftp.UploadFileAsync(stream, remotFile, cancellationToken).ConfigureAwait(false);
+      // Preserve the source timestamp so subsequent timestamp-based staleness checks work
+      // correctly. SFTP sets LastWriteTime to upload time by default.
+      var attrs = sftp.GetAttributes(remotFile);
+      attrs.LastWriteTimeUtc = file.LastWriteTimeUtc;
+      sftp.SetAttributes(remotFile, attrs);
     }
 
     foreach (var subDir in localDir.EnumerateDirectories())
@@ -744,6 +707,36 @@ internal sealed class SshTransport : IRemoteHostTransport
       return "~/.vsdbg";
 
     throw new PlatformNotSupportedException($"Platform '{platform}' is not supported.");
+  }
+
+  /// <summary>
+  /// Builds a platform-specific shell command that launches the sidecar as a detached process
+  /// independent of the SSH session. The returned command exits immediately after spawning the
+  /// process — the sidecar survives SSH session closure, enabling AppHost restart → reconnect.
+  /// </summary>
+  private static string BuildDetachedLaunchCommand(OSPlatform platform, string sidecarDll)
+  {
+    if (platform == OSPlatform.Windows)
+    {
+      // Start-Process inherits the SSH session's Job Object and is killed when the session
+      // closes. Win32_Process.Create (via WMI service) spawns outside any SSH Job Object —
+      // the sidecar survives SSH session closure.
+      //
+      // Use -EncodedCommand (base64 UTF-16LE) to bypass the SSH outer shell's variable
+      // expansion: OpenSSH on Windows runs commands through the user's registered shell
+      // (PowerShell), which expands $null before the inner powershell.exe receives it.
+      var sidecarDir = sidecarDll[..sidecarDll.LastIndexOf('/')];
+      var script = $"Invoke-WmiMethod -Class Win32_Process -Name Create " +
+                   $"-ArgumentList @('dotnet {sidecarDll}','{sidecarDir}',$null)";
+      var encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+      return $"powershell.exe -NonInteractive -EncodedCommand {encodedScript}";
+    }
+
+    if (platform == OSPlatform.Linux)
+      // nohup + & detaches from the SSH session; /dev/null prevents SIGHUP on stdin close.
+      return $"/bin/bash -c \"nohup dotnet '{sidecarDll}' </dev/null >/dev/null 2>&1 &\"";
+
+    throw new PlatformNotSupportedException($"Platform '{platform}' is not supported for sidecar detached launch.");
   }
 
   private (string shell, string shellArgs) GetShell(OSPlatform platform)  {

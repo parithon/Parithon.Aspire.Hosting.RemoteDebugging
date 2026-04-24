@@ -45,4 +45,23 @@ public sealed class RemoteProjectResource<TProject>(string name, RemoteHostResou
   /// Set by <c>DeployAsync</c> and consumed by <c>StartAsync</c>.
   /// </summary>
   internal string? RemoteDeploymentPath { get; set; }
+
+  /// <summary>
+  /// The assembly name (without extension) used as the process entry-point DLL.
+  /// Parsed from the <c>&lt;AssemblyName&gt;</c> element in the <c>.csproj</c>;
+  /// falls back to the project file name. Set by <c>BuildAsync</c>.
+  /// </summary>
+  internal string? AssemblyName { get; set; }
+
+  /// <summary>
+  /// The PID of the managed process running on the remote host.
+  /// Set by <c>StartAsync</c> after the sidecar launches the process.
+  /// </summary>
+  internal long? RemoteProcessId { get; set; }
+
+  /// <summary>
+  /// Additional environment variables injected into the remote process.
+  /// Populated via <c>WithEnvironment</c>; merged with system defaults at start time.
+  /// </summary>
+  internal Dictionary<string, string> EnvironmentVariables { get; } = new(StringComparer.Ordinal);
 }

@@ -226,12 +226,12 @@ internal static class RemoteHostConnector
     };
   }
 
-  internal static async Task DisconnectAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken)
+  internal static async Task DisconnectAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken, bool sendShutdown = false)
   {
     await resource.ConnectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
     try
     {
-      await DisconnectCoreAsync(resource, notifications, loggers, cancellationToken).ConfigureAwait(false);
+      await DisconnectCoreAsync(resource, notifications, loggers, cancellationToken, sendShutdown).ConfigureAwait(false);
     }
     finally
     {
@@ -239,7 +239,7 @@ internal static class RemoteHostConnector
     }
   }
 
-  private static async Task DisconnectCoreAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken)
+  private static async Task DisconnectCoreAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken, bool sendShutdown = false)
   {
     var logger = loggers.GetLogger(resource);
 
@@ -257,7 +257,7 @@ internal static class RemoteHostConnector
     {
       if (resource.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var annotation) && annotation is not null)
       {
-        await annotation.Transport.DisconnectAsync(logger, cancellationToken).ConfigureAwait(false);
+        await annotation.Transport.DisconnectAsync(logger, cancellationToken, sendShutdown).ConfigureAwait(false);
         annotation.Dispose();
         resource.Annotations.Remove(annotation);
       }

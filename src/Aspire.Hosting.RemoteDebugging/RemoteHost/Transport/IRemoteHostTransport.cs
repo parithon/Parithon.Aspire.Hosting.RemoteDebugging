@@ -33,7 +33,16 @@ internal interface IRemoteHostTransport : IDisposable
   GrpcChannel? SidecarChannel { get; }
 
   Task ConnectAsync(RemoteHostResource resource, ILogger logger, CancellationToken cancellationToken);
-  Task DisconnectAsync(ILogger logger, CancellationToken cancellationToken);
+
+  /// <summary>
+  /// Closes the transport connection to the remote host.
+  /// When <paramref name="sendShutdown"/> is <see langword="true"/> (explicit user-initiated
+  /// disconnect), sends a Shutdown RPC to the sidecar so it stops all managed processes and exits
+  /// cleanly. When <see langword="false"/> (AppHost graceful exit or restart), only the SSH tunnel
+  /// is closed; the sidecar remains alive so a restarted AppHost can reconnect and re-attach to
+  /// any running remote processes via <c>TryReconnectAsync</c>.
+  /// </summary>
+  Task DisconnectAsync(ILogger logger, CancellationToken cancellationToken, bool sendShutdown = false);
   Task<RemoteDebuggerInstallationResult> InstallRemoteDebugger(ILogger logger, CancellationToken cancellationToken);
   Task<bool> StartRemoteDebugger(ILogger logger, CancellationToken cancellationToken);
 
@@ -65,7 +74,13 @@ internal interface IRemoteHostTransport : IDisposable
   /// </summary>
   Task StartSidecarAsync(RemoteHostResource resource, ILogger logger, bool isReconnect, CancellationToken cancellationToken);
 
-  /// <summary>Pings the sidecar gRPC service and returns its health status.</summary>
+  /// <summary>
+  /// Compares the <c>LastWriteTimeUtc</c> of a local DLL against the corresponding
+  /// remote file over SFTP using a ±2-second tolerance.
+  /// Returns <see langword="false"/> when the remote file is absent or the timestamps differ.
+  /// </summary>
+  Task<bool> IsProjectCurrentAsync(string localDllPath, string remoteDllPath, CancellationToken cancellationToken);
+
   Task<ResourceHealthCheckResult> CheckSidecarHealthAsync(ILogger logger, CancellationToken cancellationToken);
 
   /// <summary>Checks the health of the vsdbg remote debugger process.</summary>

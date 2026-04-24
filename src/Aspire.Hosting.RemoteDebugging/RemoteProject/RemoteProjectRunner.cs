@@ -3,6 +3,9 @@ using System.Xml.Linq;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
 using Aspire.Hosting.RemoteDebugging.RemoteProject.HealthChecks;
+using Aspire.Hosting.RemoteDebugging.Sidecar;
+using Google.Protobuf.Collections;
+using Grpc.Core;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.RemoteDebugging.RemoteProject;
@@ -22,9 +25,81 @@ internal static class RemoteProjectRunner
     }
   }
 
+  internal static async Task StopAsync<TProject>(RemoteProjectResource<TProject> resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken) where TProject : IProjectMetadata
+  {
+    var logger = loggers.GetLogger(resource);
+
+    // Cancel the in-flight run first so StreamLogs unblocks immediately.
+    resource.CancelRun();
+
+    // Try to acquire the gate without blocking.
+    // If RunAsync is active (gate held), it will handle all state cleanup when cancellation
+    // propagates — we only need to send the StopProcess RPC to terminate the remote process.
+    // If no run is active we own the gate and must do explicit state cleanup.
+    var ownGate = await resource.RunGate.WaitAsync(0, CancellationToken.None).ConfigureAwait(false);
+    try
+    {
+      if (!resource.Parent.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var annotation) || annotation?.Transport.SidecarChannel is null)
+      {
+        if (ownGate)
+        {
+          resource.RemoteProcessId = null;
+          await notifications.PublishUpdateAsync(resource, s => s with
+          {
+            State = KnownRemoteProjectStates.ExitedSnapshot
+          }).ConfigureAwait(false);
+        }
+        return;
+      }
+
+      if (ownGate)
+      {
+        await notifications.PublishUpdateAsync(resource, s => s with
+        {
+          State = KnownRemoteProjectStates.StoppingSnapshot
+        }).ConfigureAwait(false);
+      }
+
+      try
+      {
+        var client = new SidecarService.SidecarServiceClient(annotation.Transport.SidecarChannel);
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var linkedCts  = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+        await client.StopProcessAsync(
+          new StopProcessRequest { Name = resource.Name },
+          cancellationToken: linkedCts.Token).ConfigureAwait(false);
+
+        logger.LogInformation("Remote process '{Name}' stopped.", resource.Name);
+      }
+      catch (Exception ex) when (ex is RpcException or OperationCanceledException)
+      {
+        logger.LogWarning(ex, "StopProcess RPC failed for '{Name}'; process may have already exited.", resource.Name);
+      }
+
+      if (ownGate)
+      {
+        resource.RemoteProcessId = null;
+        await notifications.PublishUpdateAsync(resource, s => s with
+        {
+          State = KnownRemoteProjectStates.ExitedSnapshot
+        }).ConfigureAwait(false);
+      }
+    }
+    finally
+    {
+      if (ownGate)
+        resource.RunGate.Release();
+    }
+  }
+
   private static async Task RunCoreAsync<TProject>(RemoteProjectResource<TProject> resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken) where TProject : IProjectMetadata
   {
     var logger = loggers.GetLogger(resource);
+
+    // Check whether the process is still running from a previous session and the
+    // remote artifacts are current. If so, re-attach without rebuilding/redeploying.
+    if (await TryReconnectAsync(resource, notifications, logger, cancellationToken).ConfigureAwait(false))
+      return;
 
     // Phase 1: Build
     cancellationToken.ThrowIfCancellationRequested();
@@ -71,7 +146,7 @@ internal static class RemoteProjectRunner
       return;
     }
 
-    // Phase 3: Start
+    // Phase 3: Start + stream logs (blocks until process exits or cancellation)
     cancellationToken.ThrowIfCancellationRequested();
     await notifications.PublishUpdateAsync(resource, s => s with
     {
@@ -80,7 +155,7 @@ internal static class RemoteProjectRunner
 
     try
     {
-      await StartAsync(resource, logger, cancellationToken).ConfigureAwait(false);
+      await StartAsync(resource, notifications, logger, cancellationToken).ConfigureAwait(false);
     }
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
@@ -90,14 +165,113 @@ internal static class RemoteProjectRunner
         State = KnownRemoteProjectStates.FailedToStartSnapshot,
         StopTimeStamp = DateTime.UtcNow
       }).ConfigureAwait(false);
-      return;
+    }
+  }
+
+  /// <summary>
+  /// Checks whether the remote process is still running from a previous session and the
+  /// deployed artifacts are current (timestamp within ±2s of the local build output).
+  /// <para>
+  /// If the process is running and artifacts are current, re-attaches to the log stream
+  /// with <c>replay_cached: true</c> and returns <see langword="true"/>.
+  /// If the process is running but artifacts are stale, stops the remote process and
+  /// returns <see langword="false"/> so the caller can rebuild and redeploy.
+  /// </para>
+  /// </summary>
+  private static async Task<bool> TryReconnectAsync<TProject>(
+    RemoteProjectResource<TProject> resource,
+    ResourceNotificationService notifications,
+    ILogger logger,
+    CancellationToken cancellationToken) where TProject : IProjectMetadata
+  {
+    if (!resource.Parent.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var annotation)
+      || annotation?.Transport.SidecarChannel is null)
+      return false;
+
+    var channel = annotation.Transport.SidecarChannel;
+    var client  = new SidecarService.SidecarServiceClient(channel);
+
+    ListProcessesResponse processes;
+    try
+    {
+      using var pingCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+      processes = await client.ListProcessesAsync(
+        new ListProcessesRequest(),
+        cancellationToken: pingCts.Token).ConfigureAwait(false);
+    }
+    catch (Exception ex) when (ex is RpcException or OperationCanceledException)
+    {
+      return false;
     }
 
-    cancellationToken.ThrowIfCancellationRequested();
+    var existing = processes.Processes.FirstOrDefault(p =>
+      string.Equals(p.Name, resource.Name, StringComparison.Ordinal)
+      && p.State == "Running");
+
+    if (existing is null)
+      return false;
+
+    // Process is running — check whether the remote artifacts are still current.
+    if (resource.BuildOutputPath is string localDir && resource.AssemblyName is string asmName
+      && resource.RemoteDeploymentPath is string remoteBase)
+    {
+      var localDll  = Path.Combine(localDir, $"{asmName}.dll");
+      var remoteDll = $"{remoteBase}/{asmName}.dll";
+
+      var isCurrent = await annotation.Transport
+        .IsProjectCurrentAsync(localDll, remoteDll, cancellationToken).ConfigureAwait(false);
+
+      if (!isCurrent)
+      {
+        logger.LogInformation(
+          "Remote process '{Name}' is running but artifacts are outdated; stopping before redeploying.",
+          resource.Name);
+        try
+        {
+          using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+          await client.StopProcessAsync(
+            new StopProcessRequest { Name = resource.Name },
+            cancellationToken: stopCts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is RpcException or OperationCanceledException)
+        {
+          logger.LogWarning(ex, "Failed to stop outdated remote process '{Name}'.", resource.Name);
+        }
+        return false;
+      }
+    }
+
+    logger.LogInformation(
+      "Remote process '{Name}' is still running with current artifacts; re-attaching log stream.",
+      resource.Name);
+
+    resource.RemoteProcessId = existing.Pid;
+
     await notifications.PublishUpdateAsync(resource, s => s with
     {
-      State = KnownRemoteProjectStates.RunningSnapshot
+      State = KnownRemoteProjectStates.RunningSnapshot,
+      StartTimeStamp = DateTime.UtcNow
     }).ConfigureAwait(false);
+
+    try
+    {
+      await StreamLogsAsync(resource, client, logger, replayCached: true, cancellationToken)
+        .ConfigureAwait(false);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+      logger.LogError(ex, "Error streaming logs for re-attached process '{Name}'; falling back to rebuild.", resource.Name);
+      resource.RemoteProcessId = null;
+      return false;
+    }
+
+    await notifications.PublishUpdateAsync(resource, s => s with
+    {
+      State = KnownRemoteProjectStates.ExitedSnapshot,
+      StopTimeStamp = DateTime.UtcNow
+    }).ConfigureAwait(false);
+
+    return true;
   }
 
   private static async Task BuildAsync<TProject>(RemoteProjectResource<TProject> resource, ILogger logger, CancellationToken cancellationToken)  where TProject : IProjectMetadata
@@ -144,6 +318,11 @@ internal static class RemoteProjectRunner
              $"Ensure the project includes '{currentTfm}' as a target framework.");
     }
 
+    // Resolve the assembly name: prefer <AssemblyName> in the csproj, fall back to the
+    // project file name (without extension), which is the default MSBuild behaviour.
+    var assemblyName = csprojXml.Descendants("AssemblyName").FirstOrDefault()?.Value
+      ?? Path.GetFileNameWithoutExtension(projectPath);
+
     if (logger.IsEnabled(LogLevel.Information))
       logger.LogInformation("Building framework-dependent artifact for {Project} ({Tfm})", Path.GetFileName(projectPath), tfm);
 
@@ -188,6 +367,7 @@ internal static class RemoteProjectRunner
         $"'dotnet build' failed with exit code {process.ExitCode}. See resource logs for details.");
 
     resource.BuildOutputPath = Path.Combine(projectDir, "bin", "Debug", tfm);
+    resource.AssemblyName    = assemblyName;
   }
 
   /// <summary>Reads lines from <paramref name="reader"/> until EOF, forwarding each to the logger.</summary>
@@ -226,10 +406,121 @@ internal static class RemoteProjectRunner
     resource.RemoteDeploymentPath = remotePath;
   }
 
-  private static Task StartAsync<TProject>(RemoteProjectResource<TProject> resource, ILogger logger, CancellationToken cancellationToken) where TProject : IProjectMetadata
+  private static async Task StartAsync<TProject>(
+    RemoteProjectResource<TProject> resource,
+    ResourceNotificationService notifications,
+    ILogger logger,
+    CancellationToken cancellationToken) where TProject : IProjectMetadata
   {
-    // TODO (M5/M6): launch remote process via SSH transport
-    return Task.CompletedTask;
+    if (resource.RemoteDeploymentPath is not string remotePath)
+      throw new InvalidOperationException($"Cannot start '{resource.Name}': RemoteDeploymentPath is not set.");
+
+    if (resource.AssemblyName is not string assemblyName)
+      throw new InvalidOperationException($"Cannot start '{resource.Name}': AssemblyName is not set.");
+
+    if (!resource.Parent.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var annotation)
+      || annotation?.Transport.SidecarChannel is null)
+      throw new InvalidOperationException($"Cannot start '{resource.Name}': no active sidecar channel.");
+
+    var channel = annotation.Transport.SidecarChannel;
+    var client  = new SidecarService.SidecarServiceClient(channel);
+
+    var env = BuildEnvironment(resource);
+
+    var request = new StartProcessRequest
+    {
+      Name             = resource.Name,
+      WorkingDirectory = remotePath,
+      EntryPoint       = $"{assemblyName}.dll",
+    };
+    request.Environment.Add(env);
+
+    StartProcessResponse response;
+    try
+    {
+      response = await client.StartProcessAsync(request, cancellationToken: cancellationToken)
+        .ConfigureAwait(false);
+    }
+    catch (RpcException ex)
+    {
+      throw new InvalidOperationException(
+        $"StartProcess RPC failed for '{resource.Name}': {ex.Status.Detail}", ex);
+    }
+
+    resource.RemoteProcessId = response.Pid;
+
+    if (response.AlreadyRunning)
+      logger.LogInformation("Remote process '{Name}' was already running (PID {Pid}).", resource.Name, response.Pid);
+    else
+      logger.LogInformation("Remote process '{Name}' started (PID {Pid}).", resource.Name, response.Pid);
+
+    await notifications.PublishUpdateAsync(resource, s => s with
+    {
+      State = KnownRemoteProjectStates.RunningSnapshot,
+      StartTimeStamp = DateTime.UtcNow
+    }).ConfigureAwait(false);
+
+    // Block until the remote process exits or the run is cancelled.
+    await StreamLogsAsync(resource, client, logger, replayCached: false, cancellationToken)
+      .ConfigureAwait(false);
+
+    resource.RemoteProcessId = null;
+
+    await notifications.PublishUpdateAsync(resource, s => s with
+    {
+      State = KnownRemoteProjectStates.ExitedSnapshot,
+      StopTimeStamp = DateTime.UtcNow
+    }).ConfigureAwait(false);
+  }
+
+  /// <summary>
+  /// Streams stdout/stderr from the sidecar for <paramref name="resource"/> and pipes
+  /// each line to the Aspire dashboard log. Blocks until the remote process exits or
+  /// <paramref name="cancellationToken"/> is cancelled.
+  /// </summary>
+  private static async Task StreamLogsAsync<TProject>(
+    RemoteProjectResource<TProject> resource,
+    SidecarService.SidecarServiceClient client,
+    ILogger logger,
+    bool replayCached,
+    CancellationToken cancellationToken) where TProject : IProjectMetadata
+  {
+    using var call = client.StreamLogs(
+      new StreamLogsRequest { Name = resource.Name, ReplayCached = replayCached },
+      cancellationToken: cancellationToken);
+
+    try
+    {
+      await foreach (var line in call.ResponseStream.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+      {
+        if (line.IsError)
+          logger.LogError("{Line}", line.Content);
+        else
+          logger.LogInformation("{Line}", line.Content);
+      }
+    }
+    catch (RpcException ex) when (ex.StatusCode == StatusCode.Cancelled)
+    {
+      // Client cancelled — normal stop path.
+    }
+    catch (RpcException ex) when (ex.StatusCode == StatusCode.NotFound)
+    {
+      logger.LogWarning("Process '{Name}' not found on sidecar; it may have exited before streaming started.", resource.Name);
+    }
+  }
+
+  private static MapField<string, string> BuildEnvironment<TProject>(RemoteProjectResource<TProject> resource) where TProject : IProjectMetadata
+  {
+    var env = new MapField<string, string>
+    {
+      { "ASPNETCORE_ENVIRONMENT", "Development" },
+      { "DOTNET_ENVIRONMENT",     "Development" },
+    };
+
+    foreach (var (key, value) in resource.EnvironmentVariables)
+      env[key] = value;
+
+    return env;
   }
 }
 
