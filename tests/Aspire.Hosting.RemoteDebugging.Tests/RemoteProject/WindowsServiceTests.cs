@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.RemoteDebugging.RemoteHost;
@@ -126,47 +127,68 @@ public class AsWindowsServiceExtensionTests
 }
 
 [TestClass]
-public class WindowsServiceCommandBuilderTests
+public class WindowsServiceEnvScriptTests
 {
-  // Verifies the PowerShell env-var registry command format used in WindowsServiceRunner.InstallAsync.
-  // This is a pure string-formatting test — no SSH required.
+  // Verifies the PowerShell env-var script content produced for WindowsServiceRunner.InstallAsync.
+  // This mirrors the StringBuilder logic in InstallAsync — pure string-formatting, no SSH required.
 
   [TestMethod]
-  public void RegistryEnvVarCommand_ContainsServiceName()
+  public void EnvVarScript_ContainsRegistryPathAndValues()
   {
     const string sn = "remote-worker";
-    var cmd = BuildRegistryCommand(sn, new Dictionary<string, string>
+    var script = BuildEnvScript(sn, new Dictionary<string, string>
     {
       ["OTEL_SERVICE_NAME"] = "remote-worker",
       ["DOTNET_ENVIRONMENT"] = "Production",
     });
 
-    cmd.Should().Contain($"Services\\{sn}");
-    cmd.Should().Contain("OTEL_SERVICE_NAME=remote-worker");
-    cmd.Should().Contain("DOTNET_ENVIRONMENT=Production");
-    cmd.Should().Contain("MultiString");
+    script.Should().Contain($@"Services\{sn}");
+    script.Should().Contain("'OTEL_SERVICE_NAME=remote-worker'");
+    script.Should().Contain("'DOTNET_ENVIRONMENT=Production'");
+    script.Should().Contain("MultiString");
+    script.Should().Contain("Set-ItemProperty");
   }
 
   [TestMethod]
-  public void RegistryEnvVarCommand_EscapesSingleQuotes()
+  public void EnvVarScript_EscapesSingleQuotesInValues()
   {
     const string sn = "svc";
-    var cmd = BuildRegistryCommand(sn, new Dictionary<string, string>
+    var script = BuildEnvScript(sn, new Dictionary<string, string>
     {
       ["KEY"] = "it's a value",
     });
 
     // Single quotes in the value must be doubled for PowerShell single-quoted strings.
-    cmd.Should().Contain("it''s a value");
+    script.Should().Contain("it''s a value");
   }
 
-  // Mirrors the command built in WindowsServiceRunner.InstallAsync for test isolation.
-  private static string BuildRegistryCommand(string serviceName, Dictionary<string, string> env)
+  [TestMethod]
+  public void EnvVarScript_UsesSingleQuotedStrings_NoDoubleQuotesInValues()
+  {
+    const string sn = "svc";
+    var script = BuildEnvScript(sn, new Dictionary<string, string>
+    {
+      ["KEY"] = "value with spaces",
+    });
+
+    // Values must be wrapped in single quotes, NOT double quotes (double quotes are stripped by SSH transport).
+    script.Should().Contain("'KEY=value with spaces'");
+    script.Should().NotContain("\"KEY=value with spaces\"");
+  }
+
+  // Mirrors the StringBuilder in WindowsServiceRunner.InstallAsync for test isolation.
+  private static string BuildEnvScript(string serviceName, Dictionary<string, string> env)
   {
     static string Escape(string v) => v.Replace("'", "''");
 
-    var regValues = string.Join(',', env.Select(kv => $"\"{kv.Key}={Escape(kv.Value)}\""));
-    return $@"powershell.exe -NonInteractive -Command ""Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\{serviceName}' -Name 'Environment' -Value @({regValues}) -Type MultiString""";
+    var sb = new StringBuilder();
+    sb.AppendLine($@"$regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\{serviceName}'");
+    sb.AppendLine("$values  = @(");
+    foreach (var kv in env)
+      sb.AppendLine($"  '{kv.Key}={Escape(kv.Value)}'");
+    sb.AppendLine(")");
+    sb.AppendLine("Set-ItemProperty -Path $regPath -Name 'Environment' -Value $values -Type MultiString");
+    return sb.ToString();
   }
 }
 

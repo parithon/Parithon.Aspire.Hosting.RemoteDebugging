@@ -58,7 +58,9 @@ internal static class WindowsServiceRunner
 
     // Stop (ignore errors — it may already be stopped).
     await transport.ExecuteSshCommandAsync($"sc.exe stop {sn}", cancellationToken).ConfigureAwait(false);
-    await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+
+    // Poll until the service reaches STOPPED (or is not found) before attempting delete.
+    await WaitForServiceStoppedAsync(sn, transport, logger, cancellationToken).ConfigureAwait(false);
 
     // Delete.
     var (delExit, _, delErr) = await transport.ExecuteSshCommandAsync(
@@ -119,16 +121,25 @@ internal static class WindowsServiceRunner
       $"sc.exe description {sn} \"{description}\"", cancellationToken).ConfigureAwait(false);
 
     // Write env vars to the service registry key so they are available to LocalSystem.
+    // We upload a .ps1 script via SFTP and execute it with -File to avoid SSH quoting issues
+    // (double-quotes inside -Command are stripped by the SSH shell on Windows).
     if (environment.Count > 0)
     {
-      var regValues = string.Join(
-        ',',
-        environment.Select(kv => $"\"{kv.Key}={EscapePsString(kv.Value)}\""));
+      var envScript = new StringBuilder();
+      envScript.AppendLine($@"$regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\{sn}'");
+      envScript.AppendLine("$values  = @(");
+      foreach (var kv in environment)
+        envScript.AppendLine($"  '{kv.Key}={EscapePsString(kv.Value)}'");
+      envScript.AppendLine(")");
+      envScript.AppendLine("Set-ItemProperty -Path $regPath -Name 'Environment' -Value $values -Type MultiString");
 
-      var regCmd =
-        $@"powershell.exe -NonInteractive -Command ""Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\{sn}' -Name 'Environment' -Value @({regValues}) -Type MultiString""";
+      var envScriptPath = $@"{remotePath}\set-env.ps1";
+      await transport.UploadTextAsync(envScript.ToString(), envScriptPath, cancellationToken).ConfigureAwait(false);
 
-      var (regExit, _, regErr) = await transport.ExecuteSshCommandAsync(regCmd, cancellationToken).ConfigureAwait(false);
+      var (regExit, _, regErr) = await transport.ExecuteSshCommandAsync(
+        $@"powershell.exe -NonInteractive -ExecutionPolicy Bypass -File ""{envScriptPath}""",
+        cancellationToken).ConfigureAwait(false);
+
       if (regExit != 0)
         logger.LogWarning(
           "Failed to set environment variables for service '{ServiceName}' (exit {Code}): {Error}",
@@ -240,8 +251,8 @@ internal static class WindowsServiceRunner
     else
       logger.LogInformation("Windows Service '{ServiceName}' stopped.", sn);
 
-    // Brief grace period for the SCM to finish the stop transition.
-    await Task.Delay(TimeSpan.FromSeconds(2), CancellationToken.None).ConfigureAwait(false);
+    // Poll until STOPPED before deleting — deleting a STOP_PENDING service returns error 1072.
+    await WaitForServiceStoppedAsync(sn, transport, logger, CancellationToken.None).ConfigureAwait(false);
 
     // Uninstall the service.
     var (delExit, _, delErr) = await transport.ExecuteSshCommandAsync(
@@ -319,6 +330,37 @@ internal static class WindowsServiceRunner
 
     var remoteScriptPath = $@"{remotePath}\watcher.ps1";
     await transport.UploadTextAsync(script.ToString(), remoteScriptPath, cancellationToken).ConfigureAwait(false);
+  }
+
+  /// <summary>
+  /// Polls <c>sc.exe query</c> until the service reaches the <c>STOPPED</c> state or is
+  /// no longer found (exit 1060). Waits up to 30 seconds before giving up.
+  /// </summary>
+  private static async Task WaitForServiceStoppedAsync(
+    string serviceName,
+    IRemoteHostTransport transport,
+    ILogger logger,
+    CancellationToken cancellationToken)
+  {
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+    using var linked  = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
+
+    while (!linked.Token.IsCancellationRequested)
+    {
+      var (exit, output, _) = await transport.ExecuteSshCommandAsync(
+        $"sc.exe query {serviceName}", linked.Token).ConfigureAwait(false);
+
+      if (exit == 1060)
+        return; // service no longer exists
+
+      if (output.Contains("STOPPED", StringComparison.OrdinalIgnoreCase))
+        return;
+
+      logger.LogDebug("Waiting for Windows Service '{ServiceName}' to reach STOPPED state…", serviceName);
+      await Task.Delay(TimeSpan.FromSeconds(1), linked.Token).ConfigureAwait(false);
+    }
+
+    logger.LogWarning("Windows Service '{ServiceName}' did not reach STOPPED within the timeout.", serviceName);
   }
 
   /// <summary>Escapes a string value for safe embedding inside a PowerShell single-quoted string.</summary>
