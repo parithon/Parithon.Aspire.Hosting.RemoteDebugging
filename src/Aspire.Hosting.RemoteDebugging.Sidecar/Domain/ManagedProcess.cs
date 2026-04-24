@@ -28,7 +28,8 @@ internal sealed class ManagedProcess : IAsyncDisposable
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   /// <summary>
-  /// Starts <c>dotnet <paramref name="entryPoint"/></c> in the given working directory with
+  /// Starts <c>dotnet <paramref name="entryPoint"/></c> (or <c><paramref name="executable"/> <paramref name="entryPoint"/></c>
+  /// when <paramref name="executable"/> is provided) in the given working directory with
   /// the supplied environment variables.  Kicks off background reader tasks for stdout/stderr
   /// and a process-exit monitor.
   /// </summary>
@@ -40,7 +41,8 @@ internal sealed class ManagedProcess : IAsyncDisposable
     string workingDirectory,
     string entryPoint,
     IReadOnlyDictionary<string, string> environment,
-    CancellationToken cancellationToken)
+    CancellationToken cancellationToken,
+    string? executable = null)
   {
     if (State is ProcessState.Starting or ProcessState.Running)
       throw new InvalidOperationException(
@@ -48,7 +50,8 @@ internal sealed class ManagedProcess : IAsyncDisposable
 
     State = ProcessState.Starting;
 
-    var psi = new ProcessStartInfo("dotnet", entryPoint)
+    var effectiveExecutable = string.IsNullOrWhiteSpace(executable) ? "dotnet" : executable;
+    var psi = new ProcessStartInfo(effectiveExecutable, entryPoint)
     {
       WorkingDirectory       = workingDirectory,
       RedirectStandardOutput = true,

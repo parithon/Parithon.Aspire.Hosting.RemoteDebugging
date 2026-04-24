@@ -1,9 +1,12 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Lifecycle;
 using Aspire.Hosting.RemoteDebugging.RemoteHost;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
 using Aspire.Hosting.RemoteDebugging.RemoteProject;
+using Aspire.Hosting.RemoteDebugging.RemoteProject.Annotations;
 using Aspire.Hosting.RemoteDebugging.RemoteProject.HealthChecks;
 using Microsoft.Extensions.DependencyInjection;
+using System.Runtime.InteropServices;
 
 namespace Aspire.Hosting;
 
@@ -84,6 +87,58 @@ public static class RemoteProjectResourceExtensions
     ArgumentNullException.ThrowIfNull(value);
 
     builder.Resource.EnvironmentVariables[key] = value;
+    return builder;
+  }
+
+  /// <summary>
+  /// Configures the remote project to run as an ephemeral Windows Service on the remote host.
+  /// The service is installed when the AppHost starts and removed when the AppHost stops (or on
+  /// the next connect if the AppHost crashed without cleaning up).
+  /// </summary>
+  /// <param name="builder">The remote project resource builder.</param>
+  /// <param name="serviceName">
+  /// Optional SCM service name. Defaults to the resource name with spaces replaced by hyphens.
+  /// Service names must not contain spaces.
+  /// </param>
+  /// <param name="displayName">
+  /// Optional display name shown in the Windows Services management console.
+  /// Defaults to the resource name.
+  /// </param>
+  /// <param name="description">Optional service description.</param>
+  /// <exception cref="InvalidOperationException">
+  /// Thrown if the parent <see cref="RemoteHostResource"/> is not configured for Windows.
+  /// </exception>
+  public static IResourceBuilder<RemoteProjectResource<TProject>> AsWindowsService<TProject>(
+    this IResourceBuilder<RemoteProjectResource<TProject>> builder,
+    string? serviceName = null,
+    string? displayName = null,
+    string? description = null) where TProject : IProjectMetadata
+  {
+    ArgumentNullException.ThrowIfNull(builder);
+
+    var resource = builder.Resource;
+    var host     = resource.Parent;
+
+    // Validate that the remote host is Windows.
+    if (host.TryGetLastAnnotation<RemoteHostOSPlatformAnnotation>(out var platformAnnotation)
+      && platformAnnotation is not null
+      && platformAnnotation.Platform != OSPlatform.Windows)
+    {
+      throw new InvalidOperationException(
+        $"AsWindowsService() requires the remote host '{host.Name}' to be configured for Windows, " +
+        $"but it is configured for '{platformAnnotation.Platform}'.");
+    }
+
+    // Build a safe SCM service name: no spaces, max 256 chars.
+    var resolvedServiceName = serviceName
+      ?? resource.Name.Replace(' ', '-').Replace('_', '-');
+
+    resource.Annotations.Add(new WindowsServiceAnnotation(resolvedServiceName)
+    {
+      DisplayName = displayName,
+      Description = description,
+    });
+
     return builder;
   }
 }

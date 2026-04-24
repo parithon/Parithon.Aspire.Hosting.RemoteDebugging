@@ -8,4 +8,7 @@
     <Project Path="src/Aspire.Hosting.RemoteDebugging.Sidecar/Aspire.Hosting.RemoteDebugging.Sidecar.csproj" />
     <Project Path="src/Aspire.Hosting.RemoteDebugging/Aspire.Hosting.RemoteDebugging.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Aspire.Hosting.RemoteDebugging.Tests/Aspire.Hosting.RemoteDebugging.Tests.csproj" />
+  </Folder>
 </Solution>

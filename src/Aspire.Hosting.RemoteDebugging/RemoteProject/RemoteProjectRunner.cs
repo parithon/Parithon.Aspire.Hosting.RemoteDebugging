@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Xml.Linq;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
+using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
+using Aspire.Hosting.RemoteDebugging.RemoteProject.Annotations;
 using Aspire.Hosting.RemoteDebugging.RemoteProject.HealthChecks;
 using Aspire.Hosting.RemoteDebugging.Sidecar;
 using Google.Protobuf.Collections;
@@ -39,7 +41,7 @@ internal static class RemoteProjectRunner
     var ownGate = await resource.RunGate.WaitAsync(0, CancellationToken.None).ConfigureAwait(false);
     try
     {
-      if (!resource.Parent.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var annotation) || annotation?.Transport.SidecarChannel is null)
+      if (!resource.Parent.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var annotation) || annotation?.Transport is not IRemoteHostTransport transport)
       {
         if (ownGate)
         {
@@ -60,20 +62,38 @@ internal static class RemoteProjectRunner
         }).ConfigureAwait(false);
       }
 
-      try
+      // Windows Service: stop and uninstall via sc.exe; also stops the log-watcher.
+      if (resource.TryGetLastAnnotation<WindowsServiceAnnotation>(out var svcAnnotation) && svcAnnotation is not null)
       {
-        var client = new SidecarService.SidecarServiceClient(annotation.Transport.SidecarChannel);
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        using var linkedCts  = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-        await client.StopProcessAsync(
-          new StopProcessRequest { Name = resource.Name },
-          cancellationToken: linkedCts.Token).ConfigureAwait(false);
-
-        logger.LogInformation("Remote process '{Name}' stopped.", resource.Name);
+        try
+        {
+          using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+          await WindowsServiceRunner.StopAndUninstallAsync(
+            resource, svcAnnotation, transport, logger, timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+          logger.LogWarning(ex, "Error stopping Windows Service '{Name}'.", resource.Name);
+        }
       }
-      catch (Exception ex) when (ex is RpcException or OperationCanceledException)
+      else if (annotation.Transport.SidecarChannel is not null)
       {
-        logger.LogWarning(ex, "StopProcess RPC failed for '{Name}'; process may have already exited.", resource.Name);
+        // Normal process: stop via sidecar RPC.
+        try
+        {
+          var client = new SidecarService.SidecarServiceClient(annotation.Transport.SidecarChannel);
+          using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+          using var linkedCts  = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+          await client.StopProcessAsync(
+            new StopProcessRequest { Name = resource.Name },
+            cancellationToken: linkedCts.Token).ConfigureAwait(false);
+
+          logger.LogInformation("Remote process '{Name}' stopped.", resource.Name);
+        }
+        catch (Exception ex) when (ex is RpcException or OperationCanceledException)
+        {
+          logger.LogWarning(ex, "StopProcess RPC failed for '{Name}'; process may have already exited.", resource.Name);
+        }
       }
 
       if (ownGate)
@@ -153,18 +173,115 @@ internal static class RemoteProjectRunner
       State = KnownRemoteProjectStates.StartingSnapshot
     }).ConfigureAwait(false);
 
-    try
+    // Check whether this resource should run as a Windows Service.
+    if (resource.TryGetLastAnnotation<WindowsServiceAnnotation>(out var svcAnnotation) && svcAnnotation is not null)
     {
-      await StartAsync(resource, notifications, logger, cancellationToken).ConfigureAwait(false);
-    }
-    catch (Exception ex) when (ex is not OperationCanceledException)
-    {
-      logger.LogError(ex, "Failed to start project for {Name}", resource.Name);
+      if (!resource.Parent.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var transportAnnotation)
+        || transportAnnotation?.Transport is not IRemoteHostTransport transport)
+        throw new InvalidOperationException($"Cannot install service '{resource.Name}': no active transport.");
+
+      // Phase 3a: Clean up any stale service from a previous session.
+      try
+      {
+        await WindowsServiceRunner.EnsureCleanAsync(resource, svcAnnotation, transport, logger, cancellationToken)
+          .ConfigureAwait(false);
+      }
+      catch (Exception ex) when (ex is not OperationCanceledException)
+      {
+        logger.LogWarning(ex, "Could not clean up stale Windows Service '{Name}' — continuing anyway.", resource.Name);
+      }
+
+      // Phase 3b: Install the service.
+      var env = BuildEnvironment(resource);
+      try
+      {
+        await WindowsServiceRunner.InstallAsync(resource, svcAnnotation, transport, env, logger, cancellationToken)
+          .ConfigureAwait(false);
+      }
+      catch (Exception ex) when (ex is not OperationCanceledException)
+      {
+        logger.LogError(ex, "Failed to install Windows Service for {Name}", resource.Name);
+        await notifications.PublishUpdateAsync(resource, s => s with
+        {
+          State = KnownRemoteProjectStates.FailedToStartSnapshot,
+          StopTimeStamp = DateTime.UtcNow
+        }).ConfigureAwait(false);
+        return;
+      }
+
+      // Phase 3c: Start the service and stream EventLog output.
       await notifications.PublishUpdateAsync(resource, s => s with
       {
-        State = KnownRemoteProjectStates.FailedToStartSnapshot,
+        State = KnownRemoteProjectStates.RunningSnapshot,
+        StartTimeStamp = DateTime.UtcNow
+      }).ConfigureAwait(false);
+
+      try
+      {
+        await WindowsServiceRunner.StartAndStreamAsync(resource, svcAnnotation, transport, logger, cancellationToken)
+          .ConfigureAwait(false);
+      }
+      catch (Exception ex) when (ex is not OperationCanceledException)
+      {
+        logger.LogError(ex, "Failed to start Windows Service for {Name}", resource.Name);
+        await notifications.PublishUpdateAsync(resource, s => s with
+        {
+          State = KnownRemoteProjectStates.FailedToStartSnapshot,
+          StopTimeStamp = DateTime.UtcNow
+        }).ConfigureAwait(false);
+
+        // Best-effort cleanup — remove the service even on failure.
+        try
+        {
+          using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+          await WindowsServiceRunner.StopAndUninstallAsync(
+            resource, svcAnnotation, transport, logger, cleanupCts.Token).ConfigureAwait(false);
+        }
+        catch (Exception cleanupEx)
+        {
+          logger.LogDebug(cleanupEx, "Cleanup after start failure for '{Name}' encountered an error.", resource.Name);
+        }
+        return;
+      }
+
+      // Service exited normally (cancelled). Uninstall (ephemeral lifecycle).
+      await notifications.PublishUpdateAsync(resource, s => s with
+      {
+        State = KnownRemoteProjectStates.StoppingSnapshot,
         StopTimeStamp = DateTime.UtcNow
       }).ConfigureAwait(false);
+
+      try
+      {
+        using var uninstallCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await WindowsServiceRunner.StopAndUninstallAsync(
+          resource, svcAnnotation, transport, logger, uninstallCts.Token).ConfigureAwait(false);
+      }
+      catch (Exception ex)
+      {
+        logger.LogWarning(ex, "Error uninstalling Windows Service '{Name}' after stop.", resource.Name);
+      }
+
+      await notifications.PublishUpdateAsync(resource, s => s with
+      {
+        State = KnownRemoteProjectStates.ExitedSnapshot
+      }).ConfigureAwait(false);
+    }
+    else
+    {
+      try
+      {
+        await StartAsync(resource, notifications, logger, cancellationToken).ConfigureAwait(false);
+      }
+      catch (Exception ex) when (ex is not OperationCanceledException)
+      {
+        logger.LogError(ex, "Failed to start project for {Name}", resource.Name);
+        await notifications.PublishUpdateAsync(resource, s => s with
+        {
+          State = KnownRemoteProjectStates.FailedToStartSnapshot,
+          StopTimeStamp = DateTime.UtcNow
+        }).ConfigureAwait(false);
+      }
     }
   }
 

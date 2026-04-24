@@ -49,10 +49,15 @@ message StartProcessRequest {
   // Logical name that identifies the process (matches the Aspire resource name).
   string name              = 1;
   string working_directory = 2;
-  // Entry-point DLL filename, e.g. "MyApp.dll". Invoked as `dotnet <entry_point>`.
+  // Entry-point DLL filename, e.g. "MyApp.dll". Invoked as `dotnet <entry_point>` unless
+  // `executable` is set, in which case it is passed as the argument string to that executable.
   string entry_point       = 3;
   // Environment variables to inject into the child process.
   map<string, string> environment = 4;
+  // Optional: override the default "dotnet" executable. When set, the process is launched as
+  // `<executable> <entry_point>` instead of `dotnet <entry_point>`. Use for non-dotnet
+  // processes such as "powershell.exe" for log-watcher scripts.
+  string executable        = 5;
 }
 
 message StartProcessResponse {

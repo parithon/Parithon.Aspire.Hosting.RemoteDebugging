@@ -59,7 +59,8 @@ internal sealed class SidecarGrpcService(
         request.WorkingDirectory,
         request.EntryPoint,
         request.Environment,
-        context.CancellationToken).ConfigureAwait(false);
+        context.CancellationToken,
+        string.IsNullOrWhiteSpace(request.Executable) ? null : request.Executable).ConfigureAwait(false);
 
       return new StartProcessResponse { Pid = pid, AlreadyRunning = alreadyRunning };
     }

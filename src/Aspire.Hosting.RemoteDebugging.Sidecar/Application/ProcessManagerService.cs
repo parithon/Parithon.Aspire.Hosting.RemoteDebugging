@@ -21,7 +21,8 @@ internal sealed class ProcessManagerService(
     string workingDirectory,
     string entryPoint,
     IReadOnlyDictionary<string, string> environment,
-    CancellationToken cancellationToken)
+    CancellationToken cancellationToken,
+    string? executable = null)
   {
     // Return early if a running process with this name already exists.
     if (_processes.TryGetValue(name, out var existing) && existing.State is ProcessState.Running)
@@ -40,7 +41,7 @@ internal sealed class ProcessManagerService(
 
     _processes[name] = process;
 
-    await process.StartAsync(workingDirectory, entryPoint, environment, cancellationToken)
+    await process.StartAsync(workingDirectory, entryPoint, environment, cancellationToken, executable)
       .ConfigureAwait(false);
 
     return (process.Pid, AlreadyRunning: false);

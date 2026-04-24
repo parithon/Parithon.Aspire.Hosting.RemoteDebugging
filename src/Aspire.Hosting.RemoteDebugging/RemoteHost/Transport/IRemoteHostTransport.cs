@@ -132,4 +132,16 @@ internal interface IRemoteHostTransport : IDisposable
   /// on the remote host over SFTP. The remote directory is cleaned before upload to prevent stale artifacts.
   /// </summary>
   Task DeployDirectoryAsync(string localDirectory, string remoteDirectory, ILogger logger, CancellationToken cancellationToken);
+
+  /// <summary>
+  /// Runs an SSH command on the remote host and returns its exit code, stdout, and stderr.
+  /// The command is executed as-is (no shell wrapping) — callers are responsible for any
+  /// shell-specific quoting.
+  /// </summary>
+  Task<(int ExitCode, string Output, string Error)> ExecuteSshCommandAsync(string command, CancellationToken cancellationToken);
+
+  /// <summary>
+  /// Uploads a text file to the remote host via SFTP, creating any parent directories as needed.
+  /// </summary>
+  Task UploadTextAsync(string content, string remotePath, CancellationToken cancellationToken);
 }

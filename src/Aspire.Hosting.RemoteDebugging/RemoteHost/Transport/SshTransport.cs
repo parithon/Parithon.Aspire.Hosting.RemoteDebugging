@@ -1097,4 +1097,43 @@ internal sealed class SshTransport : IRemoteHostTransport
   /// </summary>
   private static string ToWindowsPath(string sftpPath)
     => sftpPath.TrimStart('/').Replace('/', '\\');
+
+  // ── ExecuteSshCommandAsync ────────────────────────────────────────────────
+
+  /// <inheritdoc/>
+  public async Task<(int ExitCode, string Output, string Error)> ExecuteSshCommandAsync(
+    string command,
+    CancellationToken cancellationToken)
+  {
+    if (_client is null || !_client.IsConnected)
+      throw new InvalidOperationException("SSH client is not connected.");
+
+    using var cmd = _client.CreateCommand(command);
+
+    // SSH.NET's BeginExecute/EndExecute is the supported APM pattern.
+    // We do not link cancellationToken to cmd.CancelAsync() because the token here is
+    // the AppHost lifetime token — we want the command to complete naturally.
+    var output = await Task.Factory.FromAsync(cmd.BeginExecute(), cmd.EndExecute).ConfigureAwait(false);
+    return (cmd.ExitStatus ?? -1, output ?? string.Empty, cmd.Error ?? string.Empty);
+  }
+
+  // ── UploadTextAsync ───────────────────────────────────────────────────────
+
+  /// <inheritdoc/>
+  public async Task UploadTextAsync(string content, string remotePath, CancellationToken cancellationToken)
+  {
+    if (_sftpClient is null || !_sftpClient.IsConnected)
+      throw new InvalidOperationException("SFTP client is not connected.");
+
+    var sftpPath = ToSftpPath(remotePath);
+
+    // Ensure parent directory exists.
+    var parentDir = sftpPath[..sftpPath.LastIndexOf('/')];
+    if (!string.IsNullOrEmpty(parentDir) && !_sftpClient.Exists(parentDir))
+      _sftpClient.CreateDirectory(parentDir);
+
+    var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+    using var ms = new System.IO.MemoryStream(bytes);
+    await _sftpClient.UploadFileAsync(ms, sftpPath, cancellationToken).ConfigureAwait(false);
+  }
 }

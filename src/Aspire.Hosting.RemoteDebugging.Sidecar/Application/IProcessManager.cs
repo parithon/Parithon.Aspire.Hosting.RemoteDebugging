@@ -17,7 +17,8 @@ internal interface IProcessManager
     string workingDirectory,
     string entryPoint,
     IReadOnlyDictionary<string, string> environment,
-    CancellationToken cancellationToken);
+    CancellationToken cancellationToken,
+    string? executable = null);
 
   /// <summary>
   /// Stops the process identified by <paramref name="name"/>.
