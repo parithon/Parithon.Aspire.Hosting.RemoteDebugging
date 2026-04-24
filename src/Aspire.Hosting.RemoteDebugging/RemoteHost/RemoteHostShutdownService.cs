@@ -33,11 +33,12 @@ internal sealed class RemoteHostShutdownService(
     if (connected.Count == 0)
       return;
 
-    // Disconnect all remote hosts in parallel.  Use CancellationToken.None so the
-    // host's shutdown-deadline token does not abort the graceful sidecar Shutdown
-    // RPC — DisconnectAsync uses its own internal 10-second timeout for that call.
+    // Disconnect all remote hosts in parallel and send the Shutdown RPC so the
+    // sidecar stops its managed processes and exits cleanly.  Use CancellationToken.None
+    // so the host's shutdown-deadline token does not abort the graceful Shutdown RPC —
+    // DisconnectAsync uses its own internal 10-second timeout for that call.
     await Task.WhenAll(connected.Select(r =>
-      RemoteHostConnector.DisconnectAsync(r, notifications, loggers, CancellationToken.None, sendShutdown: false)))
+      RemoteHostConnector.DisconnectAsync(r, notifications, loggers, CancellationToken.None, sendShutdown: true)))
       .ConfigureAwait(false);
   }
 }
