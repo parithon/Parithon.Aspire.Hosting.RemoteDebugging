@@ -531,6 +531,15 @@ internal static class RemoteProjectRunner
       // Set the service name so the Aspire dashboard identifies the resource correctly.
       // Matches the behaviour of DCP-managed resources; user env vars below can override.
       env["OTEL_SERVICE_NAME"] = resource.Name;
+
+      // Mirror the development-mode tuning that Aspire's DCP injects for managed resources.
+      // Without these, metrics/traces/logs batch at their SDK defaults (60s / 5s / 5s),
+      // making the dashboard appear empty for the first minute of a session.
+      env["OTEL_BLRP_SCHEDULE_DELAY"] = "1000";
+      env["OTEL_BSP_SCHEDULE_DELAY"] = "1000";
+      env["OTEL_METRIC_EXPORT_INTERVAL"] = "1000";
+      env["OTEL_TRACES_SAMPLER"] = "always_on";
+      env["OTEL_METRICS_EXEMPLAR_FILTER"] = "trace_based";
     }
 
     foreach (var (key, value) in resource.EnvironmentVariables)
