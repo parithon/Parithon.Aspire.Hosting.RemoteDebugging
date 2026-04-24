@@ -2,11 +2,12 @@ using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Eventing;
 using Aspire.Hosting.Lifecycle;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.RemoteDebugging.RemoteHost;
 
-internal sealed class RemoteHostEventingSubscriber(ResourceNotificationService notifications, ResourceLoggerService loggers) : IDistributedApplicationEventingSubscriber
+internal sealed class RemoteHostEventingSubscriber(ResourceNotificationService notifications, ResourceLoggerService loggers, IServiceProvider services) : IDistributedApplicationEventingSubscriber
 {
   public Task SubscribeAsync(IDistributedApplicationEventing eventing, DistributedApplicationExecutionContext executionContext, CancellationToken cancellationToken)
   {
@@ -23,7 +24,7 @@ internal sealed class RemoteHostEventingSubscriber(ResourceNotificationService n
         {
           try
           {
-            await RemoteHostConnector.ConnectAsync(resource, notifications, loggers, ct).ConfigureAwait(false);
+            await RemoteHostConnector.ConnectAsync(resource, notifications, loggers, services, ct).ConfigureAwait(false);
           }
           catch (OperationCanceledException)
           {

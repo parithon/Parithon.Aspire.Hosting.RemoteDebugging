@@ -2,18 +2,21 @@ using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.HealthChecks;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aspire.Hosting.RemoteDebugging.RemoteHost;
 
 internal static class RemoteHostConnector
 {
-  internal static async Task ConnectAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken, bool isReconnect = false)
+  internal static async Task ConnectAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, IServiceProvider services, CancellationToken cancellationToken, bool isReconnect = false)
   {
     await resource.ConnectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
     try
     {
-      await ConnectCoreAsync(resource, notifications, loggers, cancellationToken, isReconnect).ConfigureAwait(false);
+      await ConnectCoreAsync(resource, notifications, loggers, services, cancellationToken, isReconnect).ConfigureAwait(false);
     }
     finally
     {
@@ -21,7 +24,7 @@ internal static class RemoteHostConnector
     }
   }
 
-  private static async Task ConnectCoreAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken, bool isReconnect = false)
+  private static async Task ConnectCoreAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, IServiceProvider services, CancellationToken cancellationToken, bool isReconnect = false)
   {
     var logger = loggers.GetLogger(resource);
 
@@ -102,6 +105,9 @@ internal static class RemoteHostConnector
 
       await transport.StartSidecarAsync(resource, logger, isReconnect, cancellationToken).ConfigureAwait(false);
 
+      var (otlpEndpointUrl, otlpApiKey) = ResolveOtlpConfig(services);
+      await transport.StartOtelTunnelAsync(otlpEndpointUrl, otlpApiKey, logger, cancellationToken).ConfigureAwait(false);
+
       await notifications.PublishUpdateAsync(resource, s => s with
       {
         State = KnownRemoteResourceStates.InstallingToolsSnapshot
@@ -120,7 +126,7 @@ internal static class RemoteHostConnector
       }
 
       // Subscribe to transport events BEFORE starting vsdbg so no exit event is missed.
-      SubscribeTransportEvents(transport, resource, notifications, loggers, cancellationToken);
+      SubscribeTransportEvents(transport, resource, notifications, loggers, services, cancellationToken);
 
       var started = await transport.StartRemoteDebugger(logger, cancellationToken);
       if (!started)
@@ -160,6 +166,7 @@ internal static class RemoteHostConnector
     RemoteHostResource resource,
     ResourceNotificationService notifications,
     ResourceLoggerService loggers,
+    IServiceProvider services,
     CancellationToken cancellationToken)
   {
     transport.RemoteDebuggerExited += (_, _) =>
@@ -216,7 +223,7 @@ internal static class RemoteHostConnector
           }).ConfigureAwait(false);
 
           await Task.Delay(TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false);
-          await ConnectAsync(resource, notifications, loggers, cancellationToken, isReconnect: true).ConfigureAwait(false);
+          await ConnectAsync(resource, notifications, loggers, services, cancellationToken, isReconnect: true).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -224,6 +231,59 @@ internal static class RemoteHostConnector
         }
       }, CancellationToken.None);
     };
+  }
+
+  /// <summary>
+  /// Resolves the OTLP endpoint URL and API key from the Aspire AppHost's DI container.
+  /// Reads <c>DashboardOptions.OtlpGrpcEndpointUrl</c> and <c>DashboardOptions.OtlpApiKey</c>
+  /// via reflection to avoid a hard compile-time dependency on the internal Aspire type.
+  /// Falls back to <c>IConfiguration</c> keys and the well-known default port (18889).
+  /// </summary>
+  private static (string? EndpointUrl, string? ApiKey) ResolveOtlpConfig(IServiceProvider services)
+  {
+    string? endpointUrl = null;
+    string? apiKey = null;
+
+    try
+    {
+      // DashboardOptions is an internal type in Aspire.Hosting. Resolve it via IOptions<T> using
+      // reflection so we don't need an InternalsVisibleTo or a hard dependency on internal APIs.
+      var asm = typeof(ResourceNotificationService).Assembly;
+      var dashboardOptionsType = asm.GetType("Aspire.Hosting.Dashboard.DashboardOptions");
+      if (dashboardOptionsType is not null)
+      {
+        var ioptionsType = typeof(IOptions<>).MakeGenericType(dashboardOptionsType);
+        var optionsInstance = services.GetService(ioptionsType);
+        if (optionsInstance is not null)
+        {
+          var value = ioptionsType.GetProperty("Value")?.GetValue(optionsInstance);
+          if (value is not null)
+          {
+            endpointUrl = dashboardOptionsType.GetProperty("OtlpGrpcEndpointUrl")?.GetValue(value) as string;
+            apiKey = dashboardOptionsType.GetProperty("OtlpApiKey")?.GetValue(value) as string;
+          }
+        }
+      }
+    }
+    catch
+    {
+      // Best-effort; fall through to IConfiguration fallback below.
+    }
+
+    // IConfiguration fallback: Aspire 13.x uses ASPIRE_ prefix; earlier versions used DOTNET_.
+    if (string.IsNullOrWhiteSpace(endpointUrl))
+    {
+      var config = services.GetService<IConfiguration>();
+      endpointUrl = config?["ASPIRE_DASHBOARD_OTLP_ENDPOINT_URL"]
+        ?? config?["DOTNET_DASHBOARD_OTLP_ENDPOINT_URL"]
+        ?? "http://localhost:18889";
+    }
+
+    var formattedApiKey = string.IsNullOrWhiteSpace(apiKey)
+      ? null
+      : $"x-otlp-api-key={apiKey}";
+
+    return (endpointUrl, formattedApiKey);
   }
 
   internal static async Task DisconnectAsync(RemoteHostResource resource, ResourceNotificationService notifications, ResourceLoggerService loggers, CancellationToken cancellationToken, bool sendShutdown = false)

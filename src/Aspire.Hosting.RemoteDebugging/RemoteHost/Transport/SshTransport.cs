@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using Aspire.Hosting.ApplicationModel;
@@ -16,6 +17,7 @@ namespace Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 internal sealed class SshTransport : IRemoteHostTransport
 {
   private const int SidecarPort = 5055;
+  private const int RemoteOtelPort = 4317;
   private const int SidecarReadyTimeoutSeconds = 30;
 
   // 0 = active, 1 = terminal (disconnecting or disconnected).
@@ -32,12 +34,15 @@ internal sealed class SshTransport : IRemoteHostTransport
   private DateTime _vsdbgStartTime;
 
   private ForwardedPortLocal? _sidecarPortForward;
+  private ForwardedPortRemote? _otelPortForward;
   private GrpcChannel? _sidecarChannel;
 
   public event EventHandler? ConnectionDropped;
   public event EventHandler? RemoteDebuggerExited;
 
   public GrpcChannel? SidecarChannel => _sidecarChannel;
+  public Uri? OtelTunnelEndpoint { get; private set; }
+  public string? OtelTunnelHeaders { get; private set; }
 
   public async Task ConnectAsync(RemoteHostResource resource, ILogger logger, CancellationToken cancellationToken)
   {
@@ -579,6 +584,314 @@ internal sealed class SshTransport : IRemoteHostTransport
     return Task.FromResult(ResourceHealthCheckResult.Healthy($"vsdbg running for {uptime.TotalSeconds:F0}s."));
   }
 
+  public async Task StartOtelTunnelAsync(string? otlpEndpointUrl, string? otlpApiKey, ILogger logger, CancellationToken cancellationToken)
+  {
+    if (_client is null || !_client.IsConnected)
+    {
+      logger.LogWarning("Cannot start OTEL tunnel: SSH client is not connected.");
+      return;
+    }
+
+    if (string.IsNullOrWhiteSpace(otlpEndpointUrl))
+    {
+      logger.LogInformation(
+        "No OTLP endpoint URL was resolved from the AppHost configuration; " +
+        "skipping OTEL reverse tunnel. Remote processes will not export telemetry.");
+      return;
+    }
+
+    var localOtlpUrl = otlpEndpointUrl;
+    logger.LogInformation("OTEL tunnel: AppHost OTLP endpoint is {Url}", localOtlpUrl);
+
+    if (!Uri.TryCreate(localOtlpUrl, UriKind.Absolute, out var otlpUri))
+    {
+      logger.LogWarning("DOTNET_DASHBOARD_OTLP_ENDPOINT_URL '{Url}' is not a valid URI; skipping OTEL reverse tunnel.", localOtlpUrl);
+      return;
+    }
+
+    // Normalize "localhost" → "127.0.0.1" for reliable TCP forwarding.
+    var localHost = otlpUri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+      ? "127.0.0.1"
+      : otlpUri.Host;
+    var localPort = (uint)(otlpUri.Port > 0 ? otlpUri.Port : 18889);
+
+    logger.LogDebug("OTEL tunnel: requesting sshd to bind 127.0.0.1:{RemotePort} → {LocalHost}:{LocalPort}", RemoteOtelPort, localHost, localPort);
+
+    // ForwardedPortRemote: requests sshd on the remote machine to bind 127.0.0.1:RemoteOtelPort
+    // and tunnel every incoming TCP connection back to localHost:localPort on the AppHost.
+    _otelPortForward = new ForwardedPortRemote("127.0.0.1", RemoteOtelPort, localHost, localPort);
+    _client.AddForwardedPort(_otelPortForward);
+
+    try
+    {
+      _otelPortForward.Start();
+    }
+    catch (Exception ex)
+    {
+      logger.LogWarning(ex, "Failed to start OTEL reverse tunnel on remote port {Port}; telemetry will not be forwarded.", RemoteOtelPort);
+      _client.RemoveForwardedPort(_otelPortForward);
+      _otelPortForward.Dispose();
+      _otelPortForward = null;
+      return;
+    }
+
+    // SSH.NET's ForwardedPortRemote.Start() can return without throwing even when the sshd
+    // tcpip-forward request was rejected — IsStarted will be false in that case.
+    if (!_otelPortForward.IsStarted)
+    {
+      logger.LogWarning(
+        "OTEL reverse tunnel: sshd rejected the tcpip-forward request for port {Port} (IsStarted=false). " +
+        "Ensure AllowTcpForwarding is not set to 'no' or 'local' in sshd_config on the remote host. " +
+        "Telemetry will not be forwarded.",
+        RemoteOtelPort);
+      _client.RemoveForwardedPort(_otelPortForward);
+      _otelPortForward.Dispose();
+      _otelPortForward = null;
+      return;
+    }
+
+    logger.LogDebug("OTEL tunnel: ForwardedPortRemote.IsStarted=true; verifying port is bound on remote...");
+
+    // Independently verify the port is bound by querying the remote OS.
+    // This catches cases where IsStarted=true but sshd didn't actually bind the socket.
+    await VerifyRemoteOtelPortAsync(logger, cancellationToken).ConfigureAwait(false);
+
+    // HTTPS OTLP: the remote .NET process will initiate TLS through the tunnel to the AppHost
+    // dashboard. The remote host must trust the AppHost's ASP.NET Core dev certificate so that
+    // certificate validation succeeds. Install it into the machine store (requires admin/root).
+    var isHttps = otlpUri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase);
+    if (isHttps)
+    {
+      await TrustDevCertOnRemoteAsync(logger, cancellationToken).ConfigureAwait(false);
+      OtelTunnelEndpoint = new Uri($"https://127.0.0.1:{RemoteOtelPort}");
+    }
+    else
+    {
+      OtelTunnelEndpoint = new Uri($"http://127.0.0.1:{RemoteOtelPort}");
+    }
+
+    if (!string.IsNullOrWhiteSpace(otlpApiKey))
+    {
+      OtelTunnelHeaders = otlpApiKey;
+      logger.LogInformation(
+        "OTEL reverse tunnel established: remote:127.0.0.1:{RemotePort} → {LocalOtlpUrl} (with API key header)",
+        RemoteOtelPort, localOtlpUrl);
+    }
+    else
+    {
+      logger.LogInformation(
+        "OTEL reverse tunnel established: remote:127.0.0.1:{RemotePort} → {LocalOtlpUrl}",
+        RemoteOtelPort, localOtlpUrl);
+    }
+  }
+
+  /// <summary>
+  /// Runs a platform-appropriate command on the remote to check whether port
+  /// <see cref="RemoteOtelPort"/> is actually listening, then logs the result.
+  /// This is a diagnostic step only — failures here do not abort the tunnel.
+  /// </summary>
+  private async Task VerifyRemoteOtelPortAsync(ILogger logger, CancellationToken cancellationToken)
+  {
+    if (_client is null || _resource is null)
+      return;
+
+    if (!_resource.TryGetLastAnnotation<RemoteHostOSPlatformAnnotation>(out var platformAnnotation) || platformAnnotation is null)
+      return;
+
+    string checkCmd;
+    if (platformAnnotation.Platform == OSPlatform.Windows)
+    {
+      // netstat -ano shows all TCP listeners with port numbers
+      checkCmd = $"cmd.exe /c \"netstat -ano | findstr :{RemoteOtelPort}\"";
+    }
+    else if (platformAnnotation.Platform == OSPlatform.Linux)
+    {
+      // ss preferred, netstat as fallback
+      checkCmd = $"/bin/bash -c \"ss -tlnp 2>/dev/null | grep ':{RemoteOtelPort} ' || netstat -tlnp 2>/dev/null | grep ':{RemoteOtelPort} '\"";
+    }
+    else
+    {
+      return;
+    }
+
+    try
+    {
+      using var cmd = _client.CreateCommand(checkCmd);
+      var output = await Task.Factory.FromAsync(cmd.BeginExecute(), cmd.EndExecute).ConfigureAwait(false);
+      var trimmed = output?.Trim();
+
+      if (!string.IsNullOrWhiteSpace(trimmed))
+      {
+        logger.LogInformation("OTEL tunnel: port {Port} is listening on remote — {Detail}", RemoteOtelPort, trimmed);
+      }
+      else
+      {
+        logger.LogWarning(
+          "OTEL tunnel: port {Port} does NOT appear in remote listening ports (sshd may not have bound it yet, or AllowTcpForwarding is restricted). " +
+          "netstat/ss output was empty. Exit code: {ExitCode}. Stderr: {Stderr}",
+          RemoteOtelPort, cmd.ExitStatus, cmd.Error?.Trim());
+      }
+    }
+    catch (Exception ex)
+    {
+      logger.LogDebug(ex, "OTEL tunnel: port verification SSH command failed (non-fatal).");
+    }
+  }
+
+  /// <summary>
+  /// Exports the ASP.NET Core HTTPS development certificate from the local machine (public key
+  /// only — the private key is never sent to the remote host), uploads it via SFTP, and installs
+  /// it into the remote machine certificate store so that the remote .NET process can validate the
+  /// TLS connection back to the AppHost's OTLP endpoint through the SSH reverse tunnel.
+  /// <para>
+  /// On Windows the certificate is imported into <c>Cert:\LocalMachine\Root</c> via
+  /// <c>Import-Certificate</c> (requires the SSH user to be an administrator).
+  /// On Linux the certificate is copied to <c>/usr/local/share/ca-certificates/</c> and
+  /// <c>update-ca-certificates</c> is run (requires the SSH user to be root or have
+  /// passwordless <c>sudo</c>).
+  /// </para>
+  /// <para>
+  /// Failures are logged as warnings and do not abort the tunnel setup; the remote process will
+  /// simply fail OTLP certificate validation and silently drop telemetry.
+  /// </para>
+  /// </summary>
+  private async Task TrustDevCertOnRemoteAsync(ILogger logger, CancellationToken cancellationToken)
+  {
+    if (_resource is null || _sftpClient is null || _client is null)
+    {
+      logger.LogWarning("Cannot trust dev cert on remote: transport not fully initialized.");
+      return;
+    }
+
+    if (!_resource.TryGetLastAnnotation<RemoteHostOSPlatformAnnotation>(out var platformAnnotation) || platformAnnotation is null)
+    {
+      logger.LogWarning("Cannot trust dev cert on remote: no OS platform annotation found.");
+      return;
+    }
+
+    // Export the ASP.NET Core dev cert on the local (AppHost) machine.
+    // Use a temp file; strip the private key before uploading.
+    var tempCertPath = Path.Combine(Path.GetTempPath(), $"aspire-dev-{Guid.NewGuid():N}.pem");
+    string certOnlyPem;
+    try
+    {
+      using var exportProcess = new Process
+      {
+        StartInfo = new ProcessStartInfo("dotnet",
+          $"dev-certs https --export-path \"{tempCertPath}\" --format PEM --no-password")
+        {
+          RedirectStandardOutput = true,
+          RedirectStandardError = true,
+          UseShellExecute = false,
+        }
+      };
+      exportProcess.Start();
+      await exportProcess.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+
+      if (exportProcess.ExitCode != 0 || !File.Exists(tempCertPath))
+      {
+        var stderr = await exportProcess.StandardError.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        logger.LogWarning(
+          "Failed to export ASP.NET Core dev cert (exit {Code}): {Error}. HTTPS OTLP telemetry may fail certificate validation on the remote host.",
+          exportProcess.ExitCode, stderr.Trim());
+        return;
+      }
+
+      // Extract only the PUBLIC CERTIFICATE block from the exported PEM.
+      // dotnet dev-certs exports a combined cert+key PEM; we must strip the private key
+      // before uploading. Parse the text directly instead of using X509Certificate2.CreateFromPemFile
+      // to avoid platform-specific key-import failures (e.g. on macOS with EC keys).
+      var rawPem = await File.ReadAllTextAsync(tempCertPath, cancellationToken).ConfigureAwait(false);
+      var certMatch = System.Text.RegularExpressions.Regex.Match(
+        rawPem,
+        @"-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----",
+        System.Text.RegularExpressions.RegexOptions.Singleline);
+      if (!certMatch.Success)
+      {
+        logger.LogWarning(
+          "Could not extract certificate PEM block from dev cert export. " +
+          "HTTPS OTLP telemetry may fail certificate validation on the remote host.");
+        return;
+      }
+      certOnlyPem = certMatch.Value;
+    }
+    catch (Exception ex)
+    {
+      logger.LogWarning(ex, "Failed to export ASP.NET Core dev cert. HTTPS OTLP telemetry may fail certificate validation on the remote host.");
+      return;
+    }
+    finally
+    {
+      try { File.Delete(tempCertPath); } catch { /* best-effort */ }
+    }
+
+    // Upload the public cert to the remote host via SFTP.
+    var sftpCertDir = ToSftpPath($"{_resource.DeploymentPath}/certs");
+    var sftpCertPath = $"{sftpCertDir}/aspire-dev.crt";
+    try
+    {
+      if (!_sftpClient.Exists(sftpCertDir))
+        _sftpClient.CreateDirectory(sftpCertDir);
+
+      await using var certStream = new MemoryStream(Encoding.ASCII.GetBytes(certOnlyPem));
+      await _sftpClient.UploadFileAsync(certStream, sftpCertPath, cancellationToken).ConfigureAwait(false);
+      logger.LogDebug("Uploaded dev cert (public key only) to remote: {Path}", sftpCertPath);
+    }
+    catch (Exception ex)
+    {
+      logger.LogWarning(ex, "Failed to upload dev cert to remote. HTTPS OTLP telemetry may fail certificate validation on the remote host.");
+      return;
+    }
+
+    // Trust the cert in the machine certificate store on the remote host.
+    string trustCommand;
+    if (platformAnnotation.Platform == OSPlatform.Windows)
+    {
+      var certSubPath = sftpCertPath.TrimStart('/').Replace('/', '\\');
+      // If the SFTP path has an explicit drive letter (e.g. /C:/foo → C:\foo), quote it directly.
+      // Otherwise the path is Unix-style (e.g. /tmp/foo → tmp\foo); prefix with $env:SystemDrive
+      // so PowerShell resolves it to C:\tmp\foo regardless of the actual drive letter.
+      var winCertPathExpr = certSubPath.Length >= 2 && char.IsLetter(certSubPath[0]) && certSubPath[1] == ':'
+        ? $"'{certSubPath}'"
+        : $"\"$env:SystemDrive\\{certSubPath}\"";
+      // Use EncodedCommand (base64 UTF-16LE) to avoid quoting issues regardless of shell.
+      var script = $"Import-Certificate -FilePath {winCertPathExpr} -CertStoreLocation Cert:\\LocalMachine\\Root";
+      var encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+      trustCommand = $"powershell.exe -NonInteractive -EncodedCommand {encodedScript}";
+    }
+    else if (platformAnnotation.Platform == OSPlatform.Linux)
+    {
+      trustCommand = $"/bin/bash -c \"cp '{sftpCertPath}' /usr/local/share/ca-certificates/aspire-dev.crt && update-ca-certificates\"";
+    }
+    else
+    {
+      logger.LogWarning("Platform '{Platform}' is not supported for remote dev cert trust; HTTPS OTLP telemetry may fail certificate validation.", platformAnnotation.Platform);
+      return;
+    }
+
+    try
+    {
+      using var cmd = _client.CreateCommand(trustCommand);
+      var output = await Task.Factory.FromAsync(cmd.BeginExecute(), cmd.EndExecute).ConfigureAwait(false);
+      if (cmd.ExitStatus != 0)
+      {
+        logger.LogWarning(
+          "Dev cert trust command failed on remote (exit {Code}): {Error}. HTTPS OTLP telemetry may fail certificate validation. Ensure the SSH user has admin/root privileges.",
+          cmd.ExitStatus, cmd.Error?.Trim());
+      }
+      else
+      {
+        logger.LogInformation("ASP.NET Core dev cert trusted in remote machine certificate store.");
+        if (!string.IsNullOrWhiteSpace(output))
+          logger.LogDebug("Trust command output: {Output}", output.Trim());
+      }
+    }
+    catch (Exception ex)
+    {
+      logger.LogWarning(ex, "Failed to run dev cert trust command on remote. HTTPS OTLP telemetry may fail certificate validation.");
+    }
+  }
+
   public void Dispose()
   {
     _sidecarChannel?.Dispose();
@@ -589,6 +902,14 @@ internal sealed class SshTransport : IRemoteHostTransport
       _sidecarPortForward.Dispose();
       _sidecarPortForward = null;
     }
+    if (_otelPortForward is not null)
+    {
+      _otelPortForward.Stop();
+      _otelPortForward.Dispose();
+      _otelPortForward = null;
+    }
+    OtelTunnelEndpoint = null;
+    OtelTunnelHeaders = null;
     _sftpClient?.Dispose();
     _sftpClient = null;
     _client?.Dispose();
@@ -768,4 +1089,12 @@ internal sealed class SshTransport : IRemoteHostTransport
 
     return path.Replace('\\', '/');
   }
+
+  /// <summary>
+  /// Converts an SFTP-style path back to a Windows-native backslash path.
+  /// SFTP paths for Windows drives start with a leading slash, e.g.
+  /// <c>/C:/Users/user/deploy</c> → <c>C:\Users\user\deploy</c>.
+  /// </summary>
+  private static string ToWindowsPath(string sftpPath)
+    => sftpPath.TrimStart('/').Replace('/', '\\');
 }

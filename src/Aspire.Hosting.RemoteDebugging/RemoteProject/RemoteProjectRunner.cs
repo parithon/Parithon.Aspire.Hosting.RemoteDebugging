@@ -517,6 +517,22 @@ internal static class RemoteProjectRunner
       { "DOTNET_ENVIRONMENT",     "Development" },
     };
 
+    // Inject OTEL tunnel defaults so the remote process exports telemetry back to the
+    // AppHost via the reverse SSH tunnel. User-provided vars (below) take precedence.
+    if (resource.Parent.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var annotation)
+      && annotation?.Transport.OtelTunnelEndpoint is Uri otelEndpoint)
+    {
+      env["OTEL_EXPORTER_OTLP_ENDPOINT"] = otelEndpoint.ToString().TrimEnd('/');
+      env["OTEL_EXPORTER_OTLP_PROTOCOL"] = "grpc";
+
+      if (annotation.Transport.OtelTunnelHeaders is string otlpHeaders)
+        env["OTEL_EXPORTER_OTLP_HEADERS"] = otlpHeaders;
+
+      // Set the service name so the Aspire dashboard identifies the resource correctly.
+      // Matches the behaviour of DCP-managed resources; user env vars below can override.
+      env["OTEL_SERVICE_NAME"] = resource.Name;
+    }
+
     foreach (var (key, value) in resource.EnvironmentVariables)
       env[key] = value;
 

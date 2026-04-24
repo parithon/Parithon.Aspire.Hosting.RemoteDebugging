@@ -32,6 +32,22 @@ internal interface IRemoteHostTransport : IDisposable
   /// </summary>
   GrpcChannel? SidecarChannel { get; }
 
+  /// <summary>
+  /// The OTLP endpoint that remote processes should use to export telemetry.
+  /// Points to the reverse SSH tunnel that forwards data back to the AppHost's OTLP collector.
+  /// <see langword="null"/> if no OTLP endpoint is configured on the AppHost, or until
+  /// <see cref="StartOtelTunnelAsync"/> completes successfully.
+  /// </summary>
+  Uri? OtelTunnelEndpoint { get; }
+
+  /// <summary>
+  /// The value of the <c>OTEL_EXPORTER_OTLP_HEADERS</c> environment variable read from the
+  /// AppHost process (e.g. <c>x-otlp-api-key=&lt;uuid&gt;</c>). Forwarded verbatim to remote
+  /// processes so they can authenticate with the Aspire dashboard's OTLP endpoint.
+  /// <see langword="null"/> if the AppHost has no OTLP headers configured.
+  /// </summary>
+  string? OtelTunnelHeaders { get; }
+
   Task ConnectAsync(RemoteHostResource resource, ILogger logger, CancellationToken cancellationToken);
 
   /// <summary>
@@ -73,6 +89,31 @@ internal interface IRemoteHostTransport : IDisposable
   /// </para>
   /// </summary>
   Task StartSidecarAsync(RemoteHostResource resource, ILogger logger, bool isReconnect, CancellationToken cancellationToken);
+
+  /// <summary>
+  /// Sets up a reverse SSH port forward that binds a port on the remote machine and tunnels
+  /// OTLP traffic back to the AppHost's OTLP collector endpoint.
+  /// <para>
+  /// <paramref name="otlpEndpointUrl"/> is the URL of the AppHost's OTLP gRPC endpoint (e.g.
+  /// <c>http://localhost:18889</c>). When <see langword="null"/> or empty the tunnel is skipped.
+  /// </para>
+  /// <para>
+  /// <paramref name="otlpApiKey"/> is the raw value for the <c>OTEL_EXPORTER_OTLP_HEADERS</c>
+  /// environment variable (e.g. <c>x-otlp-api-key=&lt;uuid&gt;</c>). May be <see langword="null"/>
+  /// if the dashboard is not using API-key authentication.
+  /// </para>
+  /// <para>
+  /// After this call <see cref="OtelTunnelEndpoint"/> contains the URI that remote processes
+  /// should set as <c>OTEL_EXPORTER_OTLP_ENDPOINT</c>.
+  /// </para>
+  /// <para>
+  /// When the OTLP endpoint uses HTTPS, the AppHost's ASP.NET Core development certificate is
+  /// exported (public key only), uploaded to the remote host via SFTP, and installed into the
+  /// machine certificate store so that the remote .NET process can validate TLS through the tunnel.
+  /// This requires the SSH user to have administrator (Windows) or root/sudo (Linux) privileges.
+  /// </para>
+  /// </summary>
+  Task StartOtelTunnelAsync(string? otlpEndpointUrl, string? otlpApiKey, ILogger logger, CancellationToken cancellationToken);
 
   /// <summary>
   /// Compares the <c>LastWriteTimeUtc</c> of a local DLL against the corresponding

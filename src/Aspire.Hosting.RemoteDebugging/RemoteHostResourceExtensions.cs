@@ -119,7 +119,7 @@ public static class RemoteHostResourceExtensions
       {
         var notifications = context.ServiceProvider.GetRequiredService<ResourceNotificationService>();
         var loggers = context.ServiceProvider.GetRequiredService<ResourceLoggerService>();
-        await RemoteHostConnector.ConnectAsync(remoteHost, notifications, loggers, context.CancellationToken);
+        await RemoteHostConnector.ConnectAsync(remoteHost, notifications, loggers, context.ServiceProvider, context.CancellationToken);
         return CommandResults.Success();
       }, commandOptions: new CommandOptions
       {
