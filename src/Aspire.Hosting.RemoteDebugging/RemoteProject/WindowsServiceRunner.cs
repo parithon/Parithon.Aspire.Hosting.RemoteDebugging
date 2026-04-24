@@ -42,6 +42,10 @@ internal static class WindowsServiceRunner
   {
     var sn = annotation.ServiceName;
 
+    // Always clean up any stale log-watcher process the sidecar may have retained
+    // from a previous session (the sidecar keeps running between AppHost restarts).
+    await EnsureLogWatcherStoppedAsync(annotation, transport, logger).ConfigureAwait(false);
+
     // Query the service; exit code 1060 means it does not exist — that is the happy path.
     var (exit, _, _) = await transport.ExecuteSshCommandAsync(
       $"sc.exe query {sn}", cancellationToken).ConfigureAwait(false);
@@ -227,21 +231,7 @@ internal static class WindowsServiceRunner
     var sn = annotation.ServiceName;
 
     // Stop the sidecar log-watcher first (best-effort).
-    if (transport.SidecarChannel is GrpcChannel channel)
-    {
-      try
-      {
-        var client = new SidecarService.SidecarServiceClient(channel);
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await client.StopProcessAsync(
-          new StopProcessRequest { Name = annotation.LogWatcherProcessName },
-          cancellationToken: cts.Token).ConfigureAwait(false);
-      }
-      catch (Exception ex) when (ex is RpcException or OperationCanceledException)
-      {
-        logger.LogDebug(ex, "Could not stop EventLog watcher for '{ServiceName}' (non-fatal).", sn);
-      }
-    }
+    await EnsureLogWatcherStoppedAsync(annotation, transport, logger).ConfigureAwait(false);
 
     // Stop the Windows Service (ignore errors — it may have already stopped).
     var (stopExit, _, stopErr) = await transport.ExecuteSshCommandAsync(
@@ -264,6 +254,35 @@ internal static class WindowsServiceRunner
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
+
+  /// <summary>
+  /// Stops the sidecar log-watcher process for the given service annotation (best-effort).
+  /// Called on both startup cleanup and shutdown so the sidecar's process registry is
+  /// always consistent, even when the sidecar keeps running between AppHost sessions.
+  /// </summary>
+  private static async Task EnsureLogWatcherStoppedAsync(
+    WindowsServiceAnnotation annotation,
+    IRemoteHostTransport transport,
+    ILogger logger)
+  {
+    if (transport.SidecarChannel is not GrpcChannel channel)
+      return;
+
+    try
+    {
+      var client = new SidecarService.SidecarServiceClient(channel);
+      using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+      await client.StopProcessAsync(
+        new StopProcessRequest { Name = annotation.LogWatcherProcessName },
+        cancellationToken: cts.Token).ConfigureAwait(false);
+      logger.LogDebug("Stopped stale log-watcher '{Name}' on sidecar.", annotation.LogWatcherProcessName);
+    }
+    catch (Exception ex) when (ex is RpcException or OperationCanceledException)
+    {
+      // Non-fatal: process was not running or sidecar unavailable.
+      logger.LogDebug(ex, "Could not stop log-watcher '{Name}' on sidecar (non-fatal).", annotation.LogWatcherProcessName);
+    }
+  }
 
   /// <summary>
   /// Streams stdout from the sidecar EventLog-watcher process to the Aspire dashboard.
