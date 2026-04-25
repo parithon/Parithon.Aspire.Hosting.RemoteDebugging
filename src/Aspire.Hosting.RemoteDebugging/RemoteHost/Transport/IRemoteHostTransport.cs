@@ -144,4 +144,20 @@ internal interface IRemoteHostTransport : IDisposable
   /// Uploads a text file to the remote host via SFTP, creating any parent directories as needed.
   /// </summary>
   Task UploadTextAsync(string content, string remotePath, CancellationToken cancellationToken);
+
+  /// <summary>
+  /// Sets up a reverse SSH port forward: sshd on the remote host binds a dynamically-allocated
+  /// port and tunnels every incoming connection back to <paramref name="localHost"/>:<paramref name="localPort"/>
+  /// on the dev machine.
+  /// <para>
+  /// This is used to make dev-host resource endpoints (e.g. a local web API) reachable from
+  /// processes running on the remote host when a remote project references them via
+  /// <c>WithReference</c>.
+  /// </para>
+  /// </summary>
+  /// <returns>
+  /// The port bound on the remote host (the value the remote process should connect to on
+  /// <c>127.0.0.1</c>), or <c>0</c> if the tunnel could not be established.
+  /// </returns>
+  Task<uint> StartEndpointTunnelAsync(string localHost, uint localPort, ILogger logger, CancellationToken cancellationToken);
 }

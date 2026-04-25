@@ -35,6 +35,7 @@ internal sealed class SshTransport : IRemoteHostTransport
 
   private ForwardedPortLocal? _sidecarPortForward;
   private ForwardedPortRemote? _otelPortForward;
+  private readonly List<ForwardedPortRemote> _endpointPortForwards = [];
   private GrpcChannel? _sidecarChannel;
 
   public event EventHandler? ConnectionDropped;
@@ -741,6 +742,69 @@ internal sealed class SshTransport : IRemoteHostTransport
     }
   }
 
+  /// <inheritdoc/>
+  public Task<uint> StartEndpointTunnelAsync(string localHost, uint localPort, ILogger logger, CancellationToken cancellationToken)
+  {
+    if (_client is null || !_client.IsConnected)
+    {
+      logger.LogWarning("Cannot start endpoint tunnel: SSH client is not connected.");
+      return Task.FromResult(0u);
+    }
+
+    // Normalize "localhost" → "127.0.0.1" for reliable TCP forwarding.
+    var normalizedHost = localHost.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+      ? "127.0.0.1"
+      : localHost;
+
+    // Pass boundPort=0 to let sshd allocate a free port on the remote host.
+    var forward = new ForwardedPortRemote("127.0.0.1", 0u, normalizedHost, localPort);
+    _client.AddForwardedPort(forward);
+
+    try
+    {
+      forward.Start();
+    }
+    catch (Exception ex)
+    {
+      logger.LogWarning(ex, "Failed to start endpoint tunnel for {LocalHost}:{LocalPort}.", normalizedHost, localPort);
+      _client.RemoveForwardedPort(forward);
+      forward.Dispose();
+      return Task.FromResult(0u);
+    }
+
+    if (!forward.IsStarted)
+    {
+      logger.LogWarning(
+        "Endpoint tunnel: sshd rejected the tcpip-forward request for {LocalHost}:{LocalPort}. " +
+        "Ensure AllowTcpForwarding is not set to 'no' or 'local' in sshd_config on the remote host.",
+        normalizedHost, localPort);
+      _client.RemoveForwardedPort(forward);
+      forward.Dispose();
+      return Task.FromResult(0u);
+    }
+
+    var remotePort = forward.BoundPort;
+    if (remotePort == 0)
+    {
+      logger.LogWarning(
+        "Endpoint tunnel: sshd did not allocate a dynamic port for {LocalHost}:{LocalPort}.",
+        normalizedHost, localPort);
+      forward.Stop();
+      _client.RemoveForwardedPort(forward);
+      forward.Dispose();
+      return Task.FromResult(0u);
+    }
+
+    lock (_endpointPortForwards)
+      _endpointPortForwards.Add(forward);
+
+    logger.LogInformation(
+      "Endpoint tunnel established: remote:127.0.0.1:{RemotePort} → {LocalHost}:{LocalPort}",
+      remotePort, normalizedHost, localPort);
+
+    return Task.FromResult(remotePort);
+  }
+
   /// <summary>
   /// Runs a platform-appropriate command on the remote to check whether port
   /// <see cref="RemoteOtelPort"/> is actually listening, then logs the result.
@@ -966,6 +1030,15 @@ internal sealed class SshTransport : IRemoteHostTransport
     }
     OtelTunnelEndpoint = null;
     OtelTunnelHeaders = null;
+    lock (_endpointPortForwards)
+    {
+      foreach (var forward in _endpointPortForwards)
+      {
+        forward.Stop();
+        forward.Dispose();
+      }
+      _endpointPortForwards.Clear();
+    }
     _sftpClient?.Dispose();
     _sftpClient = null;
     _client?.Dispose();

@@ -192,7 +192,8 @@ internal static class RemoteProjectRunner
       }
 
       // Phase 3b: Install the service.
-      var env = BuildEnvironment(resource);
+      var env = await BuildEnvironmentAsync(resource, transport, logger, cancellationToken)
+        .ConfigureAwait(false);
 
       // Inject logging configuration so the app knows where to write its log file.
       if (resource.TryGetLastAnnotation<LoggingSupportAnnotation>(out var logAnnotation) && logAnnotation is not null)
@@ -551,7 +552,8 @@ internal static class RemoteProjectRunner
     var channel = annotation.Transport.SidecarChannel;
     var client  = new SidecarService.SidecarServiceClient(channel);
 
-    var env = BuildEnvironment(resource);
+    var env = await BuildEnvironmentAsync(resource, annotation.Transport, logger, cancellationToken)
+      .ConfigureAwait(false);
 
     var request = new StartProcessRequest
     {
@@ -635,7 +637,11 @@ internal static class RemoteProjectRunner
     }
   }
 
-  private static MapField<string, string> BuildEnvironment<TProject>(RemoteProjectResource<TProject> resource) where TProject : IProjectMetadata
+  internal static async Task<MapField<string, string>> BuildEnvironmentAsync<TProject>(
+    RemoteProjectResource<TProject> resource,
+    IRemoteHostTransport? transport,
+    ILogger logger,
+    CancellationToken cancellationToken) where TProject : IProjectMetadata
   {
     var env = new MapField<string, string>
     {
@@ -668,10 +674,89 @@ internal static class RemoteProjectRunner
       env["OTEL_METRICS_EXEMPLAR_FILTER"] = "trace_based";
     }
 
+    // Invoke Aspire EnvironmentCallbackAnnotations added by WithReference, WithEnvironment, etc.
+    // For EndpointReference values (service discovery), set up reverse SSH tunnels so the remote
+    // process can reach dev-host endpoints via 127.0.0.1:<remotePort>.
+    if (resource.TryGetAnnotationsOfType<EnvironmentCallbackAnnotation>(out var envCallbacks))
+    {
+      var execContext = new DistributedApplicationExecutionContext(DistributedApplicationOperation.Run);
+      var callbackEnv = new Dictionary<string, object>(StringComparer.Ordinal);
+      var callbackContext = new EnvironmentCallbackContext(execContext, resource, callbackEnv, cancellationToken);
+
+      foreach (var callbackAnnotation in envCallbacks)
+        await callbackAnnotation.Callback(callbackContext).ConfigureAwait(false);
+
+      foreach (var (key, value) in callbackEnv)
+      {
+        var resolved = await ResolveEnvValueAsync(key, value, transport, logger, cancellationToken)
+          .ConfigureAwait(false);
+        if (resolved is not null)
+          env[key] = resolved;
+      }
+    }
+
+    // User-provided environment variables take highest priority.
     foreach (var (key, value) in resource.EnvironmentVariables)
       env[key] = value;
 
     return env;
+  }
+
+  /// <summary>
+  /// Resolves a single environment variable value from a <see cref="EnvironmentCallbackAnnotation"/>
+  /// callback result. For <see cref="EndpointReference"/> values, sets up a reverse SSH tunnel
+  /// and returns the tunneled URL (e.g. <c>http://127.0.0.1:&lt;remotePort&gt;</c>); for other
+  /// <see cref="IValueProvider"/> values, calls <c>GetValueAsync</c>; for plain strings, returns
+  /// the value directly.
+  /// </summary>
+  private static async Task<string?> ResolveEnvValueAsync(
+    string key,
+    object value,
+    IRemoteHostTransport? transport,
+    ILogger logger,
+    CancellationToken cancellationToken)
+  {
+    switch (value)
+    {
+      case string s:
+        return s;
+
+      case EndpointReference endpointRef:
+        if (transport is not null)
+        {
+          if (!endpointRef.IsAllocated)
+          {
+            logger.LogWarning(
+              "Endpoint '{Endpoint}' for resource '{Resource}' is not yet allocated; " +
+              "skipping reverse tunnel for environment variable '{Key}'.",
+              endpointRef.EndpointName, endpointRef.Resource.Name, key);
+          }
+          else
+          {
+            var localHost = endpointRef.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+              ? "127.0.0.1"
+              : endpointRef.Host;
+            var tunnelPort = await transport.StartEndpointTunnelAsync(
+              localHost, (uint)endpointRef.Port, logger, cancellationToken).ConfigureAwait(false);
+
+            if (tunnelPort > 0)
+              return $"{endpointRef.Scheme}://127.0.0.1:{tunnelPort}";
+
+            logger.LogWarning(
+              "Failed to set up reverse tunnel for '{Resource}' endpoint '{Endpoint}'; " +
+              "environment variable '{Key}' will use the original (possibly unreachable) URL.",
+              endpointRef.Resource.Name, endpointRef.EndpointName, key);
+          }
+        }
+        // Fall back to the original endpoint URL if no transport or tunnel failed.
+        return await endpointRef.GetValueAsync(cancellationToken).ConfigureAwait(false);
+
+      case IValueProvider valueProvider:
+        return await valueProvider.GetValueAsync(cancellationToken).ConfigureAwait(false);
+
+      default:
+        return value?.ToString();
+    }
   }
 }
 

@@ -5,7 +5,7 @@ using Aspire.Hosting.RemoteDebugging.RemoteProject.HealthChecks;
 namespace Aspire.Hosting.RemoteDebugging.RemoteProject;
 
 public sealed class RemoteProjectResource<TProject>(string name, RemoteHostResource host) : Resource(name), 
-  IResourceWithParent<RemoteHostResource> where TProject : IProjectMetadata
+  IResourceWithParent<RemoteHostResource>, IResourceWithEnvironment where TProject : IProjectMetadata
 {
   private readonly RemoteHostResource _host = host;
   public RemoteHostResource Parent => _host;
