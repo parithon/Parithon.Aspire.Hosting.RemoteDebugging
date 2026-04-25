@@ -283,7 +283,9 @@ internal sealed class SshTransport : IRemoteHostTransport
       }
 
       var debuggerPath = GetRemoteToolsPath(platformAnnotation.Platform);
-      var pwshInstallCommand = $"iwr -Uri https://aka.ms/getvsdbgps1 -OutFile $env:TEMP\\getvsdbg.ps1; & $env:TEMP\\getvsdbg.ps1 -Version {vsdbgVersion} -InstallPath {debuggerPath}";
+      // Escape paths for shell: PowerShell and bash both handle double quotes for paths with spaces.
+      // Both vsdbgVersion (validated above) and debuggerPath are user-configurable; quote for safety.
+      var pwshInstallCommand = $"iwr -Uri https://aka.ms/getvsdbgps1 -OutFile $env:TEMP\\getvsdbg.ps1; & $env:TEMP\\getvsdbg.ps1 -Version \"{vsdbgVersion}\" -InstallPath \"{debuggerPath}\"";
       var installCommand = platformAnnotation.Platform switch
       {
           var p when p == OSPlatform.Windows => _shell switch
@@ -294,7 +296,8 @@ internal sealed class SshTransport : IRemoteHostTransport
               _ => throw new InvalidOperationException($"Unsupported shell: '{_shell}'. Expected 'powershell.exe', 'pwsh.exe', or 'cmd.exe'.")
           },
           var p when p == OSPlatform.Linux =>
-              $"curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v {vsdbgVersion} -l {debuggerPath}",
+              // Bash: double-quote paths to handle spaces; version is already validated to be alphanumeric+dots.
+              $"curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v \"{vsdbgVersion}\" -l \"{debuggerPath}\"",
           var p => throw new PlatformNotSupportedException($"Platform '{p}' is not supported for vsdbg installation.")
       };
       

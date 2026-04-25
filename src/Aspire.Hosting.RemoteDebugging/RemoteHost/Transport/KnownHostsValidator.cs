@@ -18,6 +18,11 @@ internal static class KnownHostsValidator
   /// </summary>
   internal static Result Validate(string hostname, int port, string sha256Fingerprint)
   {
+    ArgumentException.ThrowIfNullOrWhiteSpace(hostname);
+    if (port < 1 || port > 65535)
+      throw new ArgumentOutOfRangeException(nameof(port), port, "Port must be between 1 and 65535.");
+    ArgumentException.ThrowIfNullOrWhiteSpace(sha256Fingerprint);
+
     var knownHostsPath = Path.Combine(
       Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
       ".ssh", "known_hosts");
@@ -30,6 +35,11 @@ internal static class KnownHostsValidator
   /// </summary>
   internal static Result ValidateFromFile(string filePath, string hostname, int port, string sha256Fingerprint)
   {
+    ArgumentException.ThrowIfNullOrWhiteSpace(hostname);
+    if (port < 1 || port > 65535)
+      throw new ArgumentOutOfRangeException(nameof(port), port, "Port must be between 1 and 65535.");
+    ArgumentException.ThrowIfNullOrWhiteSpace(sha256Fingerprint);
+
     if (!File.Exists(filePath))
       return Result.Unknown;
 
@@ -130,8 +140,9 @@ internal static class KnownHostsValidator
       var computed = hmac.ComputeHash(Encoding.UTF8.GetBytes(candidate));
       return computed.SequenceEqual(expectedHmac);
     }
-    catch
+    catch (FormatException)
     {
+      // Invalid base64 encoding in known_hosts; not a match.
       return false;
     }
   }
@@ -150,8 +161,9 @@ internal static class KnownHostsValidator
       // OpenSSH and SSH.NET both strip base64 padding from fingerprints.
       return Convert.ToBase64String(hash).TrimEnd('=');
     }
-    catch
+    catch (FormatException)
     {
+      // Invalid base64 encoding; not a valid key.
       return null;
     }
   }

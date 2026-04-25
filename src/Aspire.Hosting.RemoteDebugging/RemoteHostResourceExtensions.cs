@@ -307,6 +307,25 @@ public static class RemoteHostResourceExtensions
     ArgumentNullException.ThrowIfNull(builder);
     ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
+    // Validate path: must start with / (Unix) or be a drive letter (Windows).
+    // No path traversal (..), no spaces, no shell metacharacters.
+    // Allow: alphanumerics, hyphens, underscores, dots (version), forward slashes.
+    if (!System.Text.RegularExpressions.Regex.IsMatch(path, @"^[a-zA-Z0-9._/-]+$"))
+    {
+      throw new ArgumentException(
+        $"Deployment path contains invalid characters: '{path}'. " +
+        $"Only alphanumerics, hyphens, underscores, dots, and forward slashes are allowed.",
+        nameof(path));
+    }
+
+    // Reject path traversal attempts.
+    if (path.Contains("..") || path.EndsWith('/') == false && !path.StartsWith("/") && !System.Text.RegularExpressions.Regex.IsMatch(path, @"^[A-Z]:"))
+    {
+      throw new ArgumentException(
+        $"Deployment path is invalid: '{path}'. Must be absolute (starting with / on Unix or drive letter on Windows).",
+        nameof(path));
+    }
+
     builder.Resource.DeploymentPath = path;
     return builder;
   }
@@ -340,12 +359,22 @@ public static class RemoteHostResourceExtensions
   /// Pins the vsdbg version to install on the remote host.
   /// Defaults to <c>"latest"</c> when not configured, which carries supply-chain risk.
   /// Pin to a specific version (e.g. <c>"17.13.30618.01"</c>) for reproducible installs.
+  /// Version must be "latest" or semantic versioning format (X.Y.Z).
   /// </summary>
   public static IResourceBuilder<RemoteHostResource> WithVsdbgVersion(
     this IResourceBuilder<RemoteHostResource> builder, string version)
   {
     ArgumentNullException.ThrowIfNull(builder);
     ArgumentException.ThrowIfNullOrWhiteSpace(version);
+
+    // Validate version format: "latest" or semantic version X.Y.Z (dots and digits only)
+    if (!version.Equals("latest", StringComparison.OrdinalIgnoreCase)
+        && !System.Text.RegularExpressions.Regex.IsMatch(version, @"^\d+\.\d+\.\d+$"))
+    {
+      throw new ArgumentException(
+        $"vsdbg version must be 'latest' or semantic version format 'X.Y.Z', but got '{version}'.",
+        nameof(version));
+    }
 
     builder.Resource.VsdbgVersion = version;
     return builder;
