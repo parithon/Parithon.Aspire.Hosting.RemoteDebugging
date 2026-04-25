@@ -183,3 +183,9 @@ graph TB
 ## License
 
 [MIT](LICENSE)
+
+---
+
+## Security
+
+See [docs/threat-model.md](docs/threat-model.md) for the full threat model. This tool is intended for **development use only** on trusted networks.
