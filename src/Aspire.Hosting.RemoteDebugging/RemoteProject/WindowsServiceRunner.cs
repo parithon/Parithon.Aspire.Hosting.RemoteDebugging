@@ -1,8 +1,11 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 using Aspire.Hosting.RemoteDebugging.RemoteProject.Annotations;
+using Aspire.Hosting.RemoteDebugging.Sidecar;
 using Google.Protobuf.Collections;
+using Grpc.Core;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.RemoteDebugging.RemoteProject;
@@ -49,12 +52,21 @@ internal static class WindowsServiceRunner
     if (ScServiceNotFound(exit, output, error))
     {
       logger.LogDebug("Windows Service '{ServiceName}' not found — no cleanup needed.", sn);
+
+      // Still stop any stale log tailer from a previous session (best-effort).
+      if (resource.TryGetLastAnnotation<LoggingSupportAnnotation>(out _))
+        await EnsureLogTailerStoppedAsync(TailerProcessName(sn), transport, logger).ConfigureAwait(false);
+
       return;
     }
 
     logger.LogWarning(
       "Stale Windows Service '{ServiceName}' found from a previous session. Stopping and removing it.",
       sn);
+
+    // Stop stale log tailer before stopping the service (best-effort).
+    if (resource.TryGetLastAnnotation<LoggingSupportAnnotation>(out _))
+      await EnsureLogTailerStoppedAsync(TailerProcessName(sn), transport, logger).ConfigureAwait(false);
 
     // Stop (ignore errors — it may already be stopped).
     await transport.ExecuteSshCommandAsync($"sc.exe stop {sn}", cancellationToken).ConfigureAwait(false);
@@ -157,16 +169,22 @@ internal static class WindowsServiceRunner
       logger.LogDebug("Configured service '{ServiceName}' ({Count} env var(s)).", sn, environment.Count);
 
     logger.LogInformation("Windows Service '{ServiceName}' installed at '{BinPath}'.", sn, binPath);
+
+    // Upload the log tailer script if logging support is configured.
+    if (resource.TryGetLastAnnotation<LoggingSupportAnnotation>(out var logAnnotation) && logAnnotation is not null)
+    {
+      var tailerScript     = BuildTailerScript(logAnnotation.LogFilePath, logAnnotation.OutputTemplate);
+      var tailerScriptPath = $@"{remotePath}\log-tailer.ps1";
+      await transport.UploadTextAsync(tailerScript, tailerScriptPath, cancellationToken).ConfigureAwait(false);
+      logger.LogDebug("Log tailer script uploaded to '{Path}'.", tailerScriptPath);
+    }
   }
 
   /// <summary>
-  /// Starts the Windows Service and blocks until <paramref name="cancellationToken"/> is
-  /// cancelled (i.e. until the AppHost stops the resource).
+  /// Starts the Windows Service and either streams log output (when
+  /// <see cref="LoggingSupportAnnotation"/> is present) or holds until
+  /// <paramref name="cancellationToken"/> is cancelled.
   /// </summary>
-  /// <remarks>
-  /// Console log capture is not supported for Windows Services — services have no
-  /// stdout/stderr pipe. Logs remain available in the Windows Event Viewer on the remote host.
-  /// </remarks>
   public static async Task StartAndStreamAsync<TProject>(
     RemoteProjectResource<TProject> resource,
     WindowsServiceAnnotation annotation,
@@ -182,14 +200,26 @@ internal static class WindowsServiceRunner
     if (startExit != 0)
       throw new InvalidOperationException($"Failed to start Windows Service '{sn}' (exit {startExit}): {startErr.Trim()}");
 
-    logger.LogInformation("Windows Service '{ServiceName}' started successfully. Console log capture is not supported for Windows Services.", sn);
+    logger.LogInformation("Windows Service '{ServiceName}' started.", sn);
 
-    // Hold until the AppHost stops (cancellation token fires).
-    await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+    // If logging support is configured, start the log tailer and stream its output.
+    if (resource.TryGetLastAnnotation<LoggingSupportAnnotation>(out _)
+      && resource.RemoteDeploymentPath is string remotePath)
+    {
+      await StreamLogTailerAsync(sn, remotePath, transport, logger, cancellationToken).ConfigureAwait(false);
+    }
+    else
+    {
+      logger.LogInformation(
+        "Console log capture is not configured for Windows Service '{ServiceName}'. " +
+        "Use WithLoggingSupport() to enable log file tailing.",
+        sn);
+      await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+    }
   }
 
   /// <summary>
-  /// Stops the Windows Service and the sidecar log-watcher, then removes (uninstalls) the service.
+  /// Stops the Windows Service (and log tailer if configured), then removes (uninstalls) the service.
   /// </summary>
   public static Task StopAndUninstallAsync<TProject>(
     RemoteProjectResource<TProject> resource,
@@ -197,20 +227,31 @@ internal static class WindowsServiceRunner
     IRemoteHostTransport transport,
     ILogger logger,
     CancellationToken cancellationToken) where TProject : IProjectMetadata
-    => StopAndUninstallAsync(annotation, transport, logger, cancellationToken);
+  {
+    var tailerName = resource.TryGetLastAnnotation<LoggingSupportAnnotation>(out _)
+      ? TailerProcessName(annotation.ServiceName)
+      : null;
+    return StopAndUninstallAsync(annotation, transport, logger, cancellationToken, tailerName);
+  }
 
   /// <summary>
-  /// Stops the Windows Service and the sidecar log-watcher, then removes (uninstalls) the service.
-  /// Called by <see cref="RemoteHostShutdownService"/> during AppHost shutdown where no typed
+  /// Stops the Windows Service (and log tailer if <paramref name="tailerProcessName"/> is
+  /// provided), then removes (uninstalls) the service. Called by
+  /// <see cref="RemoteHostShutdownService"/> during AppHost shutdown where no typed
   /// <see cref="RemoteProjectResource{TProject}"/> is available.
   /// </summary>
   internal static async Task StopAndUninstallAsync(
     WindowsServiceAnnotation annotation,
     IRemoteHostTransport transport,
     ILogger logger,
-    CancellationToken cancellationToken)
+    CancellationToken cancellationToken,
+    string? tailerProcessName = null)
   {
     var sn = annotation.ServiceName;
+
+    // Stop the log tailer before stopping the service (best-effort).
+    if (tailerProcessName is not null)
+      await EnsureLogTailerStoppedAsync(tailerProcessName, transport, logger).ConfigureAwait(false);
 
     // Stop the Windows Service (ignore errors — it may have already stopped).
     var (stopExit, _, stopErr) = await transport.ExecuteSshCommandAsync(
@@ -289,4 +330,163 @@ internal static class WindowsServiceRunner
 
   /// <summary>Escapes a string value for safe embedding inside a PowerShell single-quoted string.</summary>
   private static string EscapePsString(string value) => value.Replace("'", "''");
+
+  // ── Log tailer helpers ────────────────────────────────────────────────────
+
+  /// <summary>Returns the sidecar process name for the log tailer of a given service.</summary>
+  private static string TailerProcessName(string serviceName) => $"{serviceName}-log-tailer";
+
+  /// <summary>
+  /// Sends a <c>StopProcess</c> RPC to the sidecar for the log tailer process.
+  /// No-op if the sidecar channel is unavailable; logs a debug message and returns.
+  /// </summary>
+  private static async Task EnsureLogTailerStoppedAsync(
+    string tailerProcessName,
+    IRemoteHostTransport transport,
+    ILogger logger)
+  {
+    var channel = transport.SidecarChannel;
+    if (channel is null)
+    {
+      logger.LogDebug(
+        "Sidecar channel not available; skipping log tailer stop for '{Name}'.", tailerProcessName);
+      return;
+    }
+
+    var client = new SidecarService.SidecarServiceClient(channel);
+    try
+    {
+      using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+      await client.StopProcessAsync(
+        new StopProcessRequest { Name = tailerProcessName },
+        cancellationToken: cts.Token).ConfigureAwait(false);
+      logger.LogDebug("Log tailer '{Name}' stopped.", tailerProcessName);
+    }
+    catch (Exception ex) when (ex is RpcException or OperationCanceledException)
+    {
+      logger.LogDebug(ex, "Could not stop log tailer '{Name}' — it may have already exited.", tailerProcessName);
+    }
+  }
+
+  /// <summary>
+  /// Starts a PowerShell log tailer via the sidecar and streams its output to the Aspire console.
+  /// Blocks until <paramref name="cancellationToken"/> is cancelled.
+  /// </summary>
+  private static async Task StreamLogTailerAsync(
+    string serviceName,
+    string remotePath,
+    IRemoteHostTransport transport,
+    ILogger logger,
+    CancellationToken cancellationToken)
+  {
+    var channel = transport.SidecarChannel;
+    if (channel is null)
+    {
+      logger.LogWarning(
+        "Sidecar channel not available; log tailer cannot start for '{ServiceName}'.", serviceName);
+      await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+      return;
+    }
+
+    var client         = new SidecarService.SidecarServiceClient(channel);
+    var tailerName     = TailerProcessName(serviceName);
+    var tailerScript   = $@"{remotePath}\log-tailer.ps1";
+    var tailerArgs     = $@"-NonInteractive -ExecutionPolicy Bypass -File ""{tailerScript}""";
+
+    var request = new StartProcessRequest
+    {
+      Name             = tailerName,
+      WorkingDirectory = remotePath,
+      Executable       = "powershell.exe",
+      EntryPoint       = tailerArgs,
+    };
+
+    try
+    {
+      var response = await client.StartProcessAsync(request, cancellationToken: cancellationToken)
+        .ConfigureAwait(false);
+      logger.LogInformation(
+        "Log tailer for service '{ServiceName}' started (PID {Pid}).", serviceName, response.Pid);
+    }
+    catch (RpcException ex)
+    {
+      logger.LogError(
+        ex, "Failed to start log tailer for '{ServiceName}': {Detail}", serviceName, ex.Status.Detail);
+      await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+      return;
+    }
+
+    // Stream tailer output to the Aspire console until cancelled.
+    using var call = client.StreamLogs(
+      new StreamLogsRequest { Name = tailerName, ReplayCached = false },
+      cancellationToken: cancellationToken);
+
+    try
+    {
+      await foreach (var line in call.ResponseStream.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+      {
+        if (line.IsError)
+          logger.LogError("{Line}", line.Content);
+        else
+          logger.LogInformation("{Line}", line.Content);
+      }
+    }
+    catch (RpcException ex) when (ex.StatusCode == StatusCode.Cancelled)
+    {
+      // Client cancelled — normal stop path.
+    }
+    catch (RpcException ex) when (ex.StatusCode == StatusCode.NotFound)
+    {
+      logger.LogWarning("Log tailer process '{Name}' not found on sidecar.", tailerName);
+    }
+  }
+
+  /// <summary>
+  /// Generates the PowerShell log-tailer script that tails <paramref name="logFilePath"/>
+  /// and writes error/fatal lines to stderr (so the sidecar marks them <c>is_error = true</c>).
+  /// </summary>
+  private static string BuildTailerScript(string logFilePath, string? outputTemplate)
+  {
+    var errorPattern = DeriveLevelErrorPattern(outputTemplate);
+    var escapedPath  = EscapePsString(logFilePath);
+
+    var sb = new StringBuilder();
+    sb.AppendLine($"$logFile      = '{escapedPath}'");
+    sb.AppendLine($"$errorPattern = '{errorPattern}'");
+    sb.AppendLine();
+    sb.AppendLine("Write-Output \"Log tailer: waiting for '$logFile'...\"");
+    sb.AppendLine("while (-not (Test-Path $logFile)) { Start-Sleep -Milliseconds 500 }");
+    sb.AppendLine("Write-Output \"Log tailer: tailing '$logFile'\"");
+    sb.AppendLine();
+    sb.AppendLine("Get-Content -Path $logFile -Wait -Tail 0 | ForEach-Object {");
+    sb.AppendLine("    if ($_ -match $errorPattern) {");
+    sb.AppendLine("        [Console]::Error.WriteLine($_)");
+    sb.AppendLine("    } else {");
+    sb.AppendLine("        Write-Output $_");
+    sb.AppendLine("    }");
+    sb.AppendLine("}");
+    return sb.ToString();
+  }
+
+  /// <summary>
+  /// Derives a PowerShell <c>-match</c> regular-expression pattern for error/fatal lines from
+  /// a Serilog <c>outputTemplate</c>.  Inspects the <c>{Level:…}</c> format specifier.
+  /// </summary>
+  internal static string DeriveLevelErrorPattern(string? outputTemplate)
+  {
+    if (outputTemplate is null)
+      return @"(ERR|FTL|ERRO|FATL|Error|Fatal|ERROR|FATAL)";
+
+    var match = Regex.Match(outputTemplate, @"\{Level(?::([^}]+))?\}", RegexOptions.IgnoreCase);
+    if (!match.Success)
+      return @"(ERR|FTL|ERRO|FATL|Error|Fatal|ERROR|FATAL)";
+
+    return match.Groups[1].Value.ToLowerInvariant() switch
+    {
+      "u3" => @"\b(ERR|FTL)\b",
+      "u4" => @"\b(ERRO|FATL)\b",
+      "w"  => @"\b(error|fatal)\b",
+      _    => @"\b(Error|Fatal)\b",
+    };
+  }
 }

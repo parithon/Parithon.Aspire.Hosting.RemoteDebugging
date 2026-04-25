@@ -141,5 +141,44 @@ public static class RemoteProjectResourceExtensions
 
     return builder;
   }
+
+  /// <summary>
+  /// Enables log file tailing for a Windows Service resource.
+  /// A PowerShell <c>Get-Content -Wait</c> tailer runs on the sidecar and streams each line
+  /// to the Aspire console. Error and Fatal lines are routed to stderr so they appear as
+  /// errors in the dashboard.
+  /// </summary>
+  /// <param name="builder">The remote project resource builder.</param>
+  /// <param name="logFilePath">
+  /// Absolute path to the log file on the remote host (e.g. <c>C:\Windows\Logs\app\app.log</c>).
+  /// The directory is created automatically by the application if it does not exist.
+  /// </param>
+  /// <param name="outputTemplate">
+  /// Optional Serilog <c>outputTemplate</c> used to derive the error-level detection pattern.
+  /// Supports <c>{Level:u3}</c>, <c>{Level:u4}</c>, <c>{Level:w}</c>, and plain <c>{Level}</c>.
+  /// Defaults to a conservative pattern matching all common error-level representations.
+  /// </param>
+  /// <exception cref="InvalidOperationException">
+  /// Thrown if <see cref="AsWindowsService"/> was not called first on this resource.
+  /// </exception>
+  public static IResourceBuilder<RemoteProjectResource<TProject>> WithLoggingSupport<TProject>(
+    this IResourceBuilder<RemoteProjectResource<TProject>> builder,
+    string logFilePath,
+    string? outputTemplate = null) where TProject : IProjectMetadata
+  {
+    ArgumentNullException.ThrowIfNull(builder);
+    ArgumentException.ThrowIfNullOrWhiteSpace(logFilePath);
+
+    if (!builder.Resource.TryGetLastAnnotation<WindowsServiceAnnotation>(out _))
+      throw new InvalidOperationException(
+        "WithLoggingSupport() requires AsWindowsService() to be called first on this resource.");
+
+    builder.Resource.Annotations.Add(new LoggingSupportAnnotation(logFilePath)
+    {
+      OutputTemplate = outputTemplate,
+    });
+
+    return builder;
+  }
 }
 

@@ -29,6 +29,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Aspire.Hosting.RemoteDebugging.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Generate only the client-side stubs from the sidecar proto. -->
     <Protobuf Include="..\Aspire.Hosting.RemoteDebugging.Sidecar\Protos\sidecar.proto" GrpcServices="Client" Access="Internal" />
   </ItemGroup>

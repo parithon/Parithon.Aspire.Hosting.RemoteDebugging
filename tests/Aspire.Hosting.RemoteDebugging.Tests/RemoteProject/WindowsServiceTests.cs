@@ -192,3 +192,161 @@ public sealed class FakeProject : IProjectMetadata
   public string ProjectPath => "FakeProject.csproj";
 }
 
+// ── LoggingSupportAnnotation tests ────────────────────────────────────────────
+
+[TestClass]
+public class LoggingSupportAnnotationTests
+{
+  [TestMethod]
+  public void LoggingSupportAnnotation_Properties_AreSet()
+  {
+    var annotation = new LoggingSupportAnnotation(@"C:\Logs\app\app.log")
+    {
+      OutputTemplate = "{Timestamp} [{Level:u3}] {Message}",
+    };
+
+    annotation.LogFilePath.Should().Be(@"C:\Logs\app\app.log");
+    annotation.OutputTemplate.Should().Be("{Timestamp} [{Level:u3}] {Message}");
+  }
+
+  [TestMethod]
+  public void LoggingSupportAnnotation_OutputTemplate_DefaultsToNull()
+  {
+    var annotation = new LoggingSupportAnnotation(@"C:\Logs\app\app.log");
+
+    annotation.OutputTemplate.Should().BeNull();
+  }
+}
+
+// ── WithLoggingSupport extension tests ───────────────────────────────────────
+
+[TestClass]
+public class WithLoggingSupportExtensionTests
+{
+  private static IResourceBuilder<RemoteProjectResource<FakeProject>> BuildWindowsServiceProject()
+  {
+    var appBuilder    = DistributedApplication.CreateBuilder();
+    var passwordParam = appBuilder.AddParameter("password", secret: true);
+    var credential    = new RemoteHostCredential("user", passwordParam);
+    var hostBuilder   = appBuilder.AddRemoteHost("win-dev", OSPlatform.Windows, credential);
+    var builder       = appBuilder.AddRemoteProject<FakeProject>("remote-worker", hostBuilder);
+    builder.AsWindowsService("remoteworker");
+    return builder;
+  }
+
+  [TestMethod]
+  public void WithLoggingSupport_WithoutAsWindowsService_ThrowsInvalidOperationException()
+  {
+    var appBuilder    = DistributedApplication.CreateBuilder();
+    var passwordParam = appBuilder.AddParameter("password", secret: true);
+    var credential    = new RemoteHostCredential("user", passwordParam);
+    var hostBuilder   = appBuilder.AddRemoteHost("win-dev", OSPlatform.Windows, credential);
+    var builder       = appBuilder.AddRemoteProject<FakeProject>("remote-worker", hostBuilder);
+
+    var act = () => builder.WithLoggingSupport(@"C:\Logs\app\app.log");
+
+    act.Should().Throw<InvalidOperationException>()
+      .WithMessage("*WithLoggingSupport()*AsWindowsService()*");
+  }
+
+  [TestMethod]
+  public void WithLoggingSupport_WithAsWindowsService_AddsLoggingSupportAnnotation()
+  {
+    var builder = BuildWindowsServiceProject();
+
+    builder.WithLoggingSupport(@"C:\Logs\app\app.log", "{Timestamp} [{Level:u3}] {Message}");
+
+    builder.Resource.TryGetLastAnnotation<LoggingSupportAnnotation>(out var annotation).Should().BeTrue();
+    annotation!.LogFilePath.Should().Be(@"C:\Logs\app\app.log");
+    annotation.OutputTemplate.Should().Be("{Timestamp} [{Level:u3}] {Message}");
+  }
+
+  [TestMethod]
+  public void WithLoggingSupport_NoOutputTemplate_AnnotationOutputTemplateIsNull()
+  {
+    var builder = BuildWindowsServiceProject();
+
+    builder.WithLoggingSupport(@"C:\Logs\app\app.log");
+
+    builder.Resource.TryGetLastAnnotation<LoggingSupportAnnotation>(out var annotation).Should().BeTrue();
+    annotation!.OutputTemplate.Should().BeNull();
+  }
+
+  [TestMethod]
+  public void WithLoggingSupport_ReturnsOriginalBuilder()
+  {
+    var builder = BuildWindowsServiceProject();
+
+    var result = builder.WithLoggingSupport(@"C:\Logs\app\app.log");
+
+    result.Should().BeSameAs(builder);
+  }
+}
+
+// ── Log tailer script tests ───────────────────────────────────────────────────
+
+[TestClass]
+public class LogTailerScriptTests
+{
+  [TestMethod]
+  public void DeriveLevelErrorPattern_NullTemplate_ReturnsFallbackPattern()
+  {
+    var pattern = WindowsServiceRunner.DeriveLevelErrorPattern(null);
+
+    pattern.Should().Be(@"(ERR|FTL|ERRO|FATL|Error|Fatal|ERROR|FATAL)");
+  }
+
+  [TestMethod]
+  public void DeriveLevelErrorPattern_NoLevelToken_ReturnsFallbackPattern()
+  {
+    var pattern = WindowsServiceRunner.DeriveLevelErrorPattern("{Timestamp} {Message}");
+
+    pattern.Should().Be(@"(ERR|FTL|ERRO|FATL|Error|Fatal|ERROR|FATAL)");
+  }
+
+  [TestMethod]
+  public void DeriveLevelErrorPattern_U3Format_ReturnsErrFtlPattern()
+  {
+    var pattern = WindowsServiceRunner.DeriveLevelErrorPattern(
+      "{Timestamp:HH:mm:ss} [{Level:u3}] {Message}");
+
+    pattern.Should().Be(@"\b(ERR|FTL)\b");
+  }
+
+  [TestMethod]
+  public void DeriveLevelErrorPattern_U4Format_ReturnsErroFatlPattern()
+  {
+    var pattern = WindowsServiceRunner.DeriveLevelErrorPattern(
+      "{Timestamp:HH:mm:ss} [{Level:u4}] {Message}");
+
+    pattern.Should().Be(@"\b(ERRO|FATL)\b");
+  }
+
+  [TestMethod]
+  public void DeriveLevelErrorPattern_WFormat_ReturnsLowercasePattern()
+  {
+    var pattern = WindowsServiceRunner.DeriveLevelErrorPattern(
+      "{Timestamp:HH:mm:ss} [{Level:w}] {Message}");
+
+    pattern.Should().Be(@"\b(error|fatal)\b");
+  }
+
+  [TestMethod]
+  public void DeriveLevelErrorPattern_UnknownFormat_ReturnsTitleCasePattern()
+  {
+    var pattern = WindowsServiceRunner.DeriveLevelErrorPattern(
+      "{Timestamp:HH:mm:ss} [{Level:t}] {Message}");
+
+    pattern.Should().Be(@"\b(Error|Fatal)\b");
+  }
+
+  [TestMethod]
+  public void DeriveLevelErrorPattern_LevelWithNoFormat_ReturnsTitleCasePattern()
+  {
+    var pattern = WindowsServiceRunner.DeriveLevelErrorPattern(
+      "{Timestamp:HH:mm:ss} [{Level}] {Message}");
+
+    pattern.Should().Be(@"\b(Error|Fatal)\b");
+  }
+}
+

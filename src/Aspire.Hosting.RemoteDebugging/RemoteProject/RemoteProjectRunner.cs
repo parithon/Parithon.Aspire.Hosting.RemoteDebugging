@@ -193,6 +193,15 @@ internal static class RemoteProjectRunner
 
       // Phase 3b: Install the service.
       var env = BuildEnvironment(resource);
+
+      // Inject logging configuration so the app knows where to write its log file.
+      if (resource.TryGetLastAnnotation<LoggingSupportAnnotation>(out var logAnnotation) && logAnnotation is not null)
+      {
+        env["Logging__FilePath"] = logAnnotation.LogFilePath;
+        if (logAnnotation.OutputTemplate is not null)
+          env["Logging__OutputTemplate"] = logAnnotation.OutputTemplate;
+      }
+
       try
       {
         await WindowsServiceRunner.InstallAsync(resource, svcAnnotation, transport, env, logger, cancellationToken)
