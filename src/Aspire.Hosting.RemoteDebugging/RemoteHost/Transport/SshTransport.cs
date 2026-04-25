@@ -91,24 +91,49 @@ internal sealed class SshTransport : IRemoteHostTransport
         logger.LogTrace("SSH host key received: {HostKeyName} SHA256:{Fingerprint}", e.HostKeyName, e.FingerPrintSHA256);
       }
 
-      var expectedFingerprint = resource.HostKeyFingerprint;
-      if (expectedFingerprint is not null)
+      // Explicit fingerprint pin (e.g. for CI) takes priority over known_hosts.
+      var pinnedFingerprint = resource.HostKeyFingerprint;
+      if (pinnedFingerprint is not null)
       {
-        if (!string.Equals(e.FingerPrintSHA256, expectedFingerprint, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(e.FingerPrintSHA256, pinnedFingerprint, StringComparison.OrdinalIgnoreCase))
         {
           logger.LogError(
             "SSH host key fingerprint mismatch for {Dns}. Expected SHA256:{Expected} but received SHA256:{Received}. " +
             "Connection rejected. Update WithHostKeyFingerprint() if the host key has legitimately changed.",
-            dns, expectedFingerprint, e.FingerPrintSHA256);
+            dns, pinnedFingerprint, e.FingerPrintSHA256);
           e.CanTrust = false;
         }
+        return;
       }
-      else
+
+      // Primary validation: ~/.ssh/known_hosts (same semantics as OpenSSH).
+      switch (KnownHostsValidator.Validate(dns ?? resource.Name, port, e.FingerPrintSHA256))
       {
-        logger.LogWarning(
-          "SSH host key verification is disabled for {Dns}. Call .WithHostKeyFingerprint() on the remote host " +
-          "resource to enable it and prevent man-in-the-middle attacks. Expected fingerprint: SHA256:{Fingerprint}",
-          dns, e.FingerPrintSHA256);
+        case KnownHostsValidator.Result.Trusted:
+          logger.LogDebug("SSH host key for {Dns} verified against known_hosts.", dns);
+          break;
+
+        case KnownHostsValidator.Result.Mismatch:
+          logger.LogError(
+            "SSH HOST KEY MISMATCH for {Dns} — the host key has changed since it was added to known_hosts. " +
+            "This may indicate a man-in-the-middle attack. Connection rejected. " +
+            "If the host key has legitimately changed, remove the old entry from your known_hosts file and reconnect.",
+            dns);
+          e.CanTrust = false;
+          break;
+
+        case KnownHostsValidator.Result.Revoked:
+          logger.LogError("SSH host key for {Dns} is marked @revoked in known_hosts. Connection rejected.", dns);
+          e.CanTrust = false;
+          break;
+
+        case KnownHostsValidator.Result.Unknown:
+          // TOFU: trust on first use — same as OpenSSH StrictHostKeyChecking=accept-new.
+          logger.LogWarning(
+            "SSH host key for {Dns} is not in known_hosts (SHA256:{Fingerprint}). " +
+            "Connecting anyway. To silence this warning, run: ssh-keyscan -H {Dns} >> ~/.ssh/known_hosts",
+            dns, e.FingerPrintSHA256, dns);
+          break;
       }
     };
     _client.ServerIdentificationReceived += (s, e) =>

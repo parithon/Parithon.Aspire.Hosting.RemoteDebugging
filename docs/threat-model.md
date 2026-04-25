@@ -82,18 +82,21 @@ flowchart LR
 | **Status** | ✅ Mitigated |
 
 **Description:**  
-`SshTransport.ConnectAsync` subscribes to `HostKeyReceived` and validates the received fingerprint against the value stored via `WithHostKeyFingerprint()`. If the fingerprints do not match, `e.CanTrust = false` is set and the connection is rejected. If no fingerprint is configured, a `Warning`-level log is emitted on every connection attempt that includes the received fingerprint to make first-time configuration easy.
+`SshTransport.ConnectAsync` subscribes to `HostKeyReceived` and validates the received fingerprint against the user's `~/.ssh/known_hosts` file, mirroring OpenSSH's semantics. If a mismatch or revocation is detected, `e.CanTrust = false` is set and the connection is rejected. `WithHostKeyFingerprint()` is available as an explicit pin for CI/CD environments where `known_hosts` is not populated.
 
 **Mitigations (current):**
-- `WithHostKeyFingerprint(sha256)` pins the expected fingerprint on the `RemoteHostResource`.
-- Mismatch → connection rejected with an `Error`-level log.
-- Not configured → `Warning` log with the received fingerprint so developers can copy-paste it into their AppHost.
+- **Primary:** `KnownHostsValidator` parses `~/.ssh/known_hosts` (plain entries, port-specific `[host]:port`, hashed `|1|salt|hash`, `@revoked` markers, and comma-separated hostnames).
+- **Mismatch** → connection rejected with an `Error`-level log (possible MITM warning).
+- **Revoked** → connection rejected with an `Error`-level log.
+- **Unknown (TOFU)** → connects with a `Warning` log suggesting `ssh-keyscan` to populate `known_hosts`.
+- **Override:** `WithHostKeyFingerprint(sha256)` pins an explicit fingerprint — takes priority over `known_hosts` for CI scenarios.
 
 **Operator guidance:**  
-Obtain your host's fingerprint once and add it to the AppHost:
+Add the host to your `~/.ssh/known_hosts` before first use (same as any SSH connection):
 ```bash
-ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -
+ssh-keyscan -H <host> >> ~/.ssh/known_hosts
 ```
+For CI/CD pipelines where `known_hosts` is not available, use the explicit pin:
 ```csharp
 builder.AddRemoteHost("my-server", OSPlatform.Windows, credential)
     .WithEndpoint("192.168.1.100", TransportType.SSH, 22)
@@ -257,7 +260,7 @@ The sidecar `ConnectionMonitor` shuts down all managed processes after 5 minutes
 
 | # | Threat | Action | Status |
 |---|--------|--------|--------|
-| 1 | T1 — Host key spoofing | `WithHostKeyFingerprint()` added; warn when not configured | ✅ Done |
+| 1 | T1 — Host key spoofing | `KnownHostsValidator` validates against `~/.ssh/known_hosts` (plain, hashed, revoked); `WithHostKeyFingerprint()` available as explicit override | ✅ Done |
 | 2 | T3 — Unauthenticated sidecar | Bind sidecar to `127.0.0.1` only, or add a per-session bearer token to gRPC RPCs | ⚠️ Open |
 | 3 | T5 — vsdbg supply chain | `WithVsdbgVersion()` added; warn when using `"latest"` | ✅ Done |
 

@@ -189,3 +189,28 @@ graph TB
 ## Security
 
 See [docs/threat-model.md](docs/threat-model.md) for the full threat model. This tool is intended for **development use only** on trusted networks.
+
+### SSH Host Key Verification
+
+Host keys are validated against your `~/.ssh/known_hosts` file automatically — the same behaviour as the `ssh` command. Add the remote host before first use:
+
+```bash
+ssh-keyscan -H <remote-host> >> ~/.ssh/known_hosts
+```
+
+On **mismatch** the connection is rejected with an error log warning of a possible MITM attack. On **first connect** (host not in `known_hosts`) the connection succeeds with a warning suggesting you run `ssh-keyscan`.
+
+For **CI/CD** environments where `known_hosts` is not available, use an explicit fingerprint pin:
+
+```csharp
+builder.AddRemoteHost("my-server", OSPlatform.Windows, credential)
+    .WithEndpoint("192.168.1.100", TransportType.SSH, 22)
+    .WithHostKeyFingerprint("abc123...your-sha256-fingerprint");
+```
+
+Obtain the fingerprint with:
+
+```bash
+ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -
+```
+
