@@ -194,10 +194,6 @@ internal static class RemoteProjectRunner
       // Phase 3b: Install the service.
       var env = BuildEnvironment(resource);
 
-      // Explicitly pin EventLog source = SCM service name.  .NET's EventLogLoggerProvider
-      // (activated by AddWindowsService) defaults to the service name when running under SCM.
-      // Pinning it here guarantees the watcher.ps1 ProviderName filter always matches.
-      env["Logging__EventLog__SourceName"] = svcAnnotation.ServiceName;
       // AddWindowsService() defaults EventLog minimum level to Warning.  Override to
       // Information so the worker's own LogInformation calls reach the EventLog and
       // are captured by watcher.ps1.

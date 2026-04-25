@@ -130,15 +130,18 @@ internal static class WindowsServiceRunner
     // We upload a .ps1 script via SFTP and execute it with -File to avoid SSH quoting issues
     // (double-quotes inside -Command are stripped by the SSH shell on Windows).
     //
-    // Pre-register the EventLog source using the SCM service name.  .NET's EventLogLoggerProvider
-    // (activated by AddWindowsService) defaults to writing events under the service name, so using
-    // the same name here keeps the source aligned with what the watcher.ps1 filters on.
+    // Pre-register the EventLog source under the assembly name.  .NET's EventLogLoggerProvider
+    // defaults EventLogSettings.SourceName to IHostEnvironment.ApplicationName (i.e. the
+    // entry-assembly name), which in practice equals the project/DLL name — NOT the SCM
+    // service name.  EventLogSettings is NOT bound from IConfiguration, so injecting
+    // Logging__EventLog__SourceName would have no effect.  We therefore pre-register the
+    // source under the assembly name and point the watcher at the same name.
     // Creating a source requires admin rights — the same rights needed for sc.exe create.
     var envScript = new StringBuilder();
     envScript.AppendLine($@"$regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\{sn}'");
-    envScript.AppendLine($"# Pre-register EventLog source so .NET EventLogLoggerProvider can write events.");
-    envScript.AppendLine($"if (-not [System.Diagnostics.EventLog]::SourceExists('{EscapePsString(sn)}')) {{");
-    envScript.AppendLine($"    [System.Diagnostics.EventLog]::CreateEventSource('{EscapePsString(sn)}', 'Application')");
+    envScript.AppendLine($"# Pre-register EventLog source under the assembly name so .NET EventLogLoggerProvider can write events.");
+    envScript.AppendLine($"if (-not [System.Diagnostics.EventLog]::SourceExists('{EscapePsString(assemblyName)}')) {{");
+    envScript.AppendLine($"    [System.Diagnostics.EventLog]::CreateEventSource('{EscapePsString(assemblyName)}', 'Application')");
     envScript.AppendLine("}");
     if (environment.Count > 0)
     {
@@ -163,9 +166,9 @@ internal static class WindowsServiceRunner
     else
       logger.LogDebug("Configured service '{ServiceName}' ({Count} env var(s), EventLog source registered).", sn, environment.Count);
 
-    // Upload the EventLog log-watcher script, filtering by the service name (the source
-    // .NET's EventLogLoggerProvider defaults to when running as a Windows Service).
-    await UploadLogWatcherScriptAsync(annotation, sn, remotePath, transport, cancellationToken).ConfigureAwait(false);
+    // Upload the EventLog log-watcher script, filtering by the assembly name (the source
+    // .NET's EventLogLoggerProvider defaults to — IHostEnvironment.ApplicationName).
+    await UploadLogWatcherScriptAsync(annotation, assemblyName, remotePath, transport, cancellationToken).ConfigureAwait(false);
 
     logger.LogInformation("Windows Service '{ServiceName}' installed at '{BinPath}'.", sn, binPath);
   }
