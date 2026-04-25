@@ -125,40 +125,58 @@ builder.AddRemoteProject<MyWorker>("my-worker", remoteHost)
 
 ## Architecture
 
-```
-┌─────────────────────────┐        SSH tunnel
-│   Local Machine         │◄──────────────────────────────────────┐
-│                         │                                        │
-│  Aspire AppHost         │        gRPC (port-forwarded)          │
-│  ┌───────────────────┐  │◄──────────────────────────────────────┤
-│  │ RemoteHostConnector│  │                                        │
-│  └───────────────────┘  │        OTEL (reverse tunnel)          │
-│                         │◄──────────────────────────────────────┤
-│  Aspire Dashboard        │                                        │
-└─────────────────────────┘                                        │
-                                                                   │
-┌──────────────────────────────────────────────────────────────────┤
-│   Remote Host (Windows or Linux)                                 │
-│                                                                  │
-│   aspire-sidecar  (gRPC :5055)                                  │
-│   ├── StartProcess / StopProcess / ListProcesses                │
-│   ├── StreamLogs (server-streaming)                             │
-│   └── Ping                                                      │
-│                                                                  │
-│   Your .NET Project  (or Windows Service)                       │
-│   └── Serilog → log file → PowerShell tailer → sidecar → Aspire│
-└──────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph local["Local Machine"]
+        apphost["Aspire AppHost\n(RemoteHostConnector)"]
+        dashboard["Aspire Dashboard"]
+    end
+
+    subgraph remote["Remote Host (Windows or Linux)"]
+        sidecar["aspire-sidecar\ngRPC :5055"]
+        app["Your .NET Project\n(or Windows Service)"]
+        tailer["PowerShell log tailer\n(Get-Content -Wait)"]
+        logfile["Serilog log file"]
+    end
+
+    apphost -- "deploy binaries\n(SCP over SSH)" --> remote
+    apphost -- "gRPC RPCs\n(SSH port-forward)" --> sidecar
+    sidecar -- "StartProcess / StopProcess\nStreamLogs" --> app
+    sidecar -- "StartProcess / StreamLogs" --> tailer
+    app -- "writes" --> logfile
+    tailer -- "tails" --> logfile
+    app -- "OTEL\n(SSH reverse tunnel)" --> dashboard
 ```
 
 ---
 
 ## Requirements
 
-- .NET 10 SDK
-- .NET Aspire 13+
-- SSH access to the remote host (Windows or Linux)
-- Remote host must allow inbound SSH (port 22 by default)
-- For Windows Service: the SSH user must have permission to run `sc.exe`
+### Local machine
+
+- [.NET 10 SDK](https://dotnet.microsoft.com/download)
+- [.NET Aspire 13+](https://learn.microsoft.com/dotnet/aspire)
+- Network access to the remote host on the SSH port (default: 22)
+
+### Remote host
+
+| Requirement | Windows | Linux |
+|-------------|---------|-------|
+| **OS** | Windows Server 2016+ or Windows 10/11 | Any modern distro |
+| **SSH server** | [OpenSSH for Windows](https://learn.microsoft.com/windows-server/administration/openssh/openssh_install_firstuse) enabled and running | `sshd` running |
+| **SSH port** | 22 (default, configurable) | 22 (default, configurable) |
+| **.NET runtime** | .NET 10 runtime or SDK | .NET 10 runtime or SDK |
+| **Deployment path** | Write access to `%USERPROFILE%\.aspire\deployments` (default) | Write access to `~/.aspire/deployments` (default) |
+| **vsdbg path** | Write access to `%LOCALAPPDATA%\Microsoft\vsdbg` (default) | Write access to `~/.vsdbg` (default) |
+| **Firewall** | No inbound rules needed — all traffic flows over the SSH tunnel | No inbound rules needed |
+
+#### Additional requirements for `AsWindowsService`
+
+| Requirement | Notes |
+|-------------|-------|
+| **Elevated SSH user** | The SSH user must be a member of the local **Administrators** group to run `sc.exe create/start/stop/delete` |
+| **PowerShell** | PowerShell must be available (`powershell.exe`) — needed for environment variable injection scripts |
+| **`WithLoggingSupport`** | App must use **Serilog** with a **file sink** and `RollingInterval.Infinite`; the log directory must be writable by the service account (default: `LocalSystem`) |
 
 ---
 
