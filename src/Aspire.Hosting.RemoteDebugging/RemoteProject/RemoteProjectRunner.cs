@@ -193,11 +193,6 @@ internal static class RemoteProjectRunner
 
       // Phase 3b: Install the service.
       var env = BuildEnvironment(resource);
-
-      // AddWindowsService() defaults EventLog minimum level to Warning.  Override to
-      // Information so the worker's own LogInformation calls reach the EventLog and
-      // are captured by watcher.ps1.
-      env["Logging__EventLog__LogLevel__Default"] = "Information";
       try
       {
         await WindowsServiceRunner.InstallAsync(resource, svcAnnotation, transport, env, logger, cancellationToken)

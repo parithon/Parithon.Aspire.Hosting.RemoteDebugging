@@ -1,13 +1,8 @@
-using System.Runtime.InteropServices;
 using System.Text;
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.RemoteDebugging.RemoteHost;
 using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 using Aspire.Hosting.RemoteDebugging.RemoteProject.Annotations;
-using Aspire.Hosting.RemoteDebugging.Sidecar;
 using Google.Protobuf.Collections;
-using Grpc.Core;
-using Grpc.Net.Client;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.RemoteDebugging.RemoteProject;
@@ -21,9 +16,12 @@ namespace Aspire.Hosting.RemoteDebugging.RemoteProject;
 /// <list type="number">
 ///   <item><see cref="EnsureCleanAsync"/> — removes any stale service left by a previous AppHost session.</item>
 ///   <item><see cref="InstallAsync"/> — installs the service and injects env vars via the registry.</item>
-///   <item><see cref="StartAndStreamAsync"/> — starts the service and streams an EventLog watcher via the sidecar until cancelled.</item>
-///   <item><see cref="StopAndUninstallAsync"/> — stops the service, stops the log-watcher, and removes the service.</item>
+///   <item><see cref="StartAndStreamAsync"/> — starts the service and blocks until cancelled.</item>
+///   <item><see cref="StopAndUninstallAsync"/> — stops the service and removes it.</item>
 /// </list>
+/// <para>
+/// Console log capture is not supported for Windows Services — services have no stdout/stderr.
+/// </para>
 /// </remarks>
 internal static class WindowsServiceRunner
 {
@@ -41,10 +39,6 @@ internal static class WindowsServiceRunner
     CancellationToken cancellationToken) where TProject : IProjectMetadata
   {
     var sn = annotation.ServiceName;
-
-    // Always clean up any stale log-watcher process the sidecar may have retained
-    // from a previous session (the sidecar keeps running between AppHost restarts).
-    await EnsureLogWatcherStoppedAsync(annotation, transport, logger).ConfigureAwait(false);
 
     // Query the service.
     // NOTE: sc.exe exit codes are NOT reliably propagated through PowerShell (PowerShell
@@ -129,20 +123,16 @@ internal static class WindowsServiceRunner
     // Write env vars to the service registry key so they are available to LocalSystem.
     // We upload a .ps1 script via SFTP and execute it with -File to avoid SSH quoting issues
     // (double-quotes inside -Command are stripped by the SSH shell on Windows).
-    //
-    // Pre-register the EventLog source under the assembly name.  .NET's EventLogLoggerProvider
-    // defaults EventLogSettings.SourceName to IHostEnvironment.ApplicationName (i.e. the
-    // entry-assembly name), which in practice equals the project/DLL name — NOT the SCM
-    // service name.  EventLogSettings is NOT bound from IConfiguration, so injecting
-    // Logging__EventLog__SourceName would have no effect.  We therefore pre-register the
-    // source under the assembly name and point the watcher at the same name.
-    // Creating a source requires admin rights — the same rights needed for sc.exe create.
     var envScript = new StringBuilder();
     envScript.AppendLine($@"$regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\{sn}'");
-    envScript.AppendLine($"# Pre-register EventLog source under the assembly name so .NET EventLogLoggerProvider can write events.");
-    envScript.AppendLine($"if (-not [System.Diagnostics.EventLog]::SourceExists('{EscapePsString(assemblyName)}')) {{");
-    envScript.AppendLine($"    [System.Diagnostics.EventLog]::CreateEventSource('{EscapePsString(assemblyName)}', 'Application')");
-    envScript.AppendLine("}");
+    if (environment.Count > 0)
+    {
+      envScript.AppendLine("$values  = @(");
+      foreach (var kv in environment)
+        envScript.AppendLine($"  '{kv.Key}={EscapePsString(kv.Value)}'");
+      envScript.AppendLine(")");
+      envScript.AppendLine("Set-ItemProperty -Path $regPath -Name 'Environment' -Value $values -Type MultiString");
+    }
     if (environment.Count > 0)
     {
       envScript.AppendLine("$values  = @(");
@@ -164,20 +154,19 @@ internal static class WindowsServiceRunner
         "Failed to configure service '{ServiceName}' (exit {Code}): {Error}",
         sn, regExit, regErr.Trim());
     else
-      logger.LogDebug("Configured service '{ServiceName}' ({Count} env var(s), EventLog source registered).", sn, environment.Count);
-
-    // Upload the EventLog log-watcher script, filtering by the assembly name (the source
-    // .NET's EventLogLoggerProvider defaults to — IHostEnvironment.ApplicationName).
-    await UploadLogWatcherScriptAsync(annotation, assemblyName, remotePath, transport, cancellationToken).ConfigureAwait(false);
+      logger.LogDebug("Configured service '{ServiceName}' ({Count} env var(s)).", sn, environment.Count);
 
     logger.LogInformation("Windows Service '{ServiceName}' installed at '{BinPath}'.", sn, binPath);
   }
 
   /// <summary>
-  /// Starts the Windows Service and, via the sidecar, an EventLog watcher that forwards
-  /// Application Event Log entries to the Aspire dashboard.  Blocks until
-  /// <paramref name="cancellationToken"/> is cancelled (i.e. until the service is stopped).
+  /// Starts the Windows Service and blocks until <paramref name="cancellationToken"/> is
+  /// cancelled (i.e. until the AppHost stops the resource).
   /// </summary>
+  /// <remarks>
+  /// Console log capture is not supported for Windows Services — services have no
+  /// stdout/stderr pipe. Logs remain available in the Windows Event Viewer on the remote host.
+  /// </remarks>
   public static async Task StartAndStreamAsync<TProject>(
     RemoteProjectResource<TProject> resource,
     WindowsServiceAnnotation annotation,
@@ -185,9 +174,6 @@ internal static class WindowsServiceRunner
     ILogger logger,
     CancellationToken cancellationToken) where TProject : IProjectMetadata
   {
-    if (resource.RemoteDeploymentPath is not string remotePath)
-      throw new InvalidOperationException($"Cannot start service '{resource.Name}': RemoteDeploymentPath is not set.");
-
     var sn = annotation.ServiceName;
 
     // Start the SCM service.
@@ -196,41 +182,10 @@ internal static class WindowsServiceRunner
     if (startExit != 0)
       throw new InvalidOperationException($"Failed to start Windows Service '{sn}' (exit {startExit}): {startErr.Trim()}");
 
-    logger.LogInformation("Windows Service '{ServiceName}' started.", sn);
+    logger.LogInformation("Windows Service '{ServiceName}' started successfully. Console log capture is not supported for Windows Services.", sn);
 
-    if (transport.SidecarChannel is null)
-    {
-      logger.LogWarning("No sidecar channel — EventLog watcher will not be started for '{ServiceName}'.", sn);
-      await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
-      return;
-    }
-
-    // Start the EventLog watcher process via the sidecar.  The sidecar streams its
-    // stdout/stderr back to the Aspire dashboard under the log-watcher process name.
-    var watcherScript = $@"{remotePath}\watcher.ps1";
-    var client = new SidecarService.SidecarServiceClient(transport.SidecarChannel);
-
-    var request = new StartProcessRequest
-    {
-      Name             = annotation.LogWatcherProcessName,
-      WorkingDirectory = remotePath,
-      EntryPoint       = $@"-NonInteractive -File ""{watcherScript}""",
-      Executable       = "powershell.exe",
-    };
-
-    try
-    {
-      var response = await client.StartProcessAsync(request, cancellationToken: cancellationToken)
-        .ConfigureAwait(false);
-      logger.LogDebug("EventLog watcher started (PID {Pid}).", response.Pid);
-    }
-    catch (RpcException ex)
-    {
-      logger.LogWarning(ex, "Failed to start EventLog watcher for '{ServiceName}' — console logs will not appear.", sn);
-    }
-
-    // Stream the watcher's output until the run is cancelled.
-    await StreamWatcherLogsAsync(annotation, client, logger, cancellationToken).ConfigureAwait(false);
+    // Hold until the AppHost stops (cancellation token fires).
+    await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
   }
 
   /// <summary>
@@ -257,9 +212,6 @@ internal static class WindowsServiceRunner
   {
     var sn = annotation.ServiceName;
 
-    // Stop the sidecar log-watcher first (best-effort).
-    await EnsureLogWatcherStoppedAsync(annotation, transport, logger).ConfigureAwait(false);
-
     // Stop the Windows Service (ignore errors — it may have already stopped).
     var (stopExit, _, stopErr) = await transport.ExecuteSshCommandAsync(
       $"sc.exe stop {sn}", cancellationToken).ConfigureAwait(false);
@@ -281,110 +233,6 @@ internal static class WindowsServiceRunner
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
-
-  /// <summary>
-  /// Stops the sidecar log-watcher process for the given service annotation (best-effort).
-  /// Called on both startup cleanup and shutdown so the sidecar's process registry is
-  /// always consistent, even when the sidecar keeps running between AppHost sessions.
-  /// </summary>
-  private static async Task EnsureLogWatcherStoppedAsync(
-    WindowsServiceAnnotation annotation,
-    IRemoteHostTransport transport,
-    ILogger logger)
-  {
-    if (transport.SidecarChannel is not GrpcChannel channel)
-      return;
-
-    try
-    {
-      var client = new SidecarService.SidecarServiceClient(channel);
-      using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-      await client.StopProcessAsync(
-        new StopProcessRequest { Name = annotation.LogWatcherProcessName },
-        cancellationToken: cts.Token).ConfigureAwait(false);
-      logger.LogDebug("Stopped stale log-watcher '{Name}' on sidecar.", annotation.LogWatcherProcessName);
-    }
-    catch (Exception ex) when (ex is RpcException or OperationCanceledException)
-    {
-      // Non-fatal: process was not running or sidecar unavailable.
-      logger.LogDebug(ex, "Could not stop log-watcher '{Name}' on sidecar (non-fatal).", annotation.LogWatcherProcessName);
-    }
-  }
-
-  /// <summary>
-  /// Streams stdout from the sidecar EventLog-watcher process to the Aspire dashboard.
-  /// Blocks until the watcher exits or the token is cancelled.
-  /// </summary>
-  private static async Task StreamWatcherLogsAsync(
-    WindowsServiceAnnotation annotation,
-    SidecarService.SidecarServiceClient client,
-    ILogger logger,
-    CancellationToken cancellationToken)
-  {
-    using var call = client.StreamLogs(
-      new StreamLogsRequest { Name = annotation.LogWatcherProcessName, ReplayCached = true },
-      cancellationToken: cancellationToken);
-
-    try
-    {
-      await foreach (var line in call.ResponseStream.ReadAllAsync(cancellationToken).ConfigureAwait(false))
-      {
-        if (line.IsError)
-          logger.LogError("{Line}", line.Content);
-        else
-          logger.LogInformation("{Line}", line.Content);
-      }
-    }
-    catch (RpcException ex) when (ex.StatusCode == StatusCode.Cancelled)
-    {
-      // Normal — cancellation token fired (AppHost stopping or user clicked Stop).
-    }
-    catch (RpcException ex) when (ex.StatusCode == StatusCode.NotFound)
-    {
-      logger.LogDebug("EventLog watcher process not found on sidecar — it may have already exited.");
-    }
-  }
-
-  /// <summary>
-  /// Generates and uploads <c>watcher.ps1</c> to the remote deployment directory.
-  /// The script polls the Windows Application Event Log for entries whose Source matches
-  /// the assembly name (the source registered by .NET's <c>EventLogLoggerProvider</c>)
-  /// and writes them to stdout so the sidecar can capture them.
-  /// </summary>
-  private static async Task UploadLogWatcherScriptAsync(
-    WindowsServiceAnnotation annotation,
-    string assemblyName,
-    string remotePath,
-    IRemoteHostTransport transport,
-    CancellationToken cancellationToken)
-  {
-    // Track the last-seen EventRecordId rather than using StartTime: Get-WinEvent's
-    // StartTime filter has only second-level precision, so TimeCreated.AddMilliseconds(1)
-    // does not reliably advance the cursor and the same event can be re-emitted each poll.
-    // RecordId is a monotonically-increasing integer that uniquely identifies each event.
-    var source = assemblyName;
-    var script = new StringBuilder();
-    script.AppendLine("# Auto-generated EventLog watcher — do not edit.");
-    script.AppendLine($"$source = '{EscapePsString(source)}'");
-    script.AppendLine("$lastId = [long]0");
-    script.AppendLine("$after  = (Get-Date).AddSeconds(-10)");
-    script.AppendLine($"Write-Output \"EventLog watcher active: monitoring source '$source' from $after (local)\"");
-    script.AppendLine("while ($true) {");
-    script.AppendLine("  try {");
-    script.AppendLine("    $events = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = $source; StartTime = $after } -ErrorAction SilentlyContinue");
-    script.AppendLine("    if ($events) {");
-    script.AppendLine("      $events | Sort-Object RecordId | Where-Object { $_.RecordId -gt $lastId } | ForEach-Object {");
-    script.AppendLine("        $lastId = $_.RecordId");
-    script.AppendLine("        Write-Output \"[$($_.LevelDisplayName)] $($_.Message)\"");
-    script.AppendLine("      }");
-    script.AppendLine("    }");
-    script.AppendLine("  } catch { }");
-    script.AppendLine("  Start-Sleep -Milliseconds 500");
-    script.AppendLine("}");
-
-    var remoteScriptPath = $@"{remotePath}\watcher.ps1";
-    await transport.UploadTextAsync(script.ToString(), remoteScriptPath, cancellationToken).ConfigureAwait(false);
-  }
 
   /// <summary>
   /// Polls <c>sc.exe query</c> until the service reaches the <c>STOPPED</c> state or is

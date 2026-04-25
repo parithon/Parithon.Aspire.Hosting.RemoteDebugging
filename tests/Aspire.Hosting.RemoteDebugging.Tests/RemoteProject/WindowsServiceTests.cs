@@ -14,14 +14,6 @@ namespace Aspire.Hosting.RemoteDebugging.Tests.RemoteProject;
 public class WindowsServiceAnnotationTests
 {
   [TestMethod]
-  public void WindowsServiceAnnotation_DefaultLogWatcherName_IsServiceNameSuffixed()
-  {
-    var annotation = new WindowsServiceAnnotation("my-service");
-
-    annotation.LogWatcherProcessName.Should().Be("my-service-log-watcher");
-  }
-
-  [TestMethod]
   public void WindowsServiceAnnotation_Properties_AreSet()
   {
     var annotation = new WindowsServiceAnnotation("svc")
