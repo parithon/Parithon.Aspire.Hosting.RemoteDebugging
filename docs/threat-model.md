@@ -131,18 +131,15 @@ The SSH password is resolved from an Aspire `ParameterResource` (user secrets or
 |-|-|
 | **Category** | Elevation of Privilege |
 | **Severity** | Medium |
-| **Status** | ✅ Mitigated by architecture |
+| **Status** | ✅ Mitigated |
 
 **Description:**  
 The sidecar gRPC service (`aspire-sidecar`) listens on TCP port 5055 with no TLS and no authentication token. Any process that can reach that port can start/stop arbitrary processes on the remote host.
 
 **Mitigations (current):**
-- The sidecar binds to all interfaces (`:5055`) but the AppHost only connects via an SSH port-forward to `127.0.0.1`. The SSH connection is required to reach the sidecar.
-- On a correctly configured remote host, port 5055 is not exposed through the firewall.
-
-**Residual risk:** If the remote host's firewall exposes port 5055 to the network, any unauthenticated client can control the sidecar. Operators must verify firewall rules.
-
-**Recommended improvement:** Add a shared secret / bearer token to sidecar RPCs, or bind the sidecar to `127.0.0.1` only.
+- The sidecar binds to **`127.0.0.1` (loopback) only** — it is unreachable from the network regardless of firewall configuration.
+- The AppHost connects exclusively via an SSH port-forward; SSH authentication is required to establish that forward.
+- No bearer token is required because network-level isolation is stronger (an unauthenticated process on the network cannot reach the socket at all).
 
 ---
 
@@ -261,7 +258,7 @@ The sidecar `ConnectionMonitor` shuts down all managed processes after 5 minutes
 | # | Threat | Action | Status |
 |---|--------|--------|--------|
 | 1 | T1 — Host key spoofing | `KnownHostsValidator` validates against `~/.ssh/known_hosts` (plain, hashed, revoked); `WithHostKeyFingerprint()` available as explicit override | ✅ Done |
-| 2 | T3 — Unauthenticated sidecar | Bind sidecar to `127.0.0.1` only, or add a per-session bearer token to gRPC RPCs | ⚠️ Open |
+| 2 | T3 — Unauthenticated sidecar | Sidecar now binds to `127.0.0.1` (loopback) only via `ListenLocalhost` — unreachable from network regardless of firewall | ✅ Done |
 | 3 | T5 — vsdbg supply chain | `WithVsdbgVersion()` added; warn when using `"latest"` | ✅ Done |
 
 ---

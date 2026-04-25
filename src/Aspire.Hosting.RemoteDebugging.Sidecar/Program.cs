@@ -94,11 +94,14 @@ builder.Services.AddSingleton<LogCachePersistence>();
 builder.Services.AddSingleton<ConnectionMonitor>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ConnectionMonitor>());
 
-// Kestrel: listen on TCP, HTTP/2 only — no TLS (sidecar runs on a trusted internal network).
+// Kestrel: bind to loopback only (127.0.0.1) — the AppHost reaches the sidecar
+// exclusively via an SSH port-forward, so there is no need to accept connections
+// from the network. Loopback binding eliminates the attack surface regardless of
+// whether the host's firewall exposes port 5055.
 builder.WebHost.ConfigureKestrel((context, options) =>
 {
   var port = context.Configuration.GetValue($"{SidecarOptions.SectionName}:Port", 5055);
-  options.ListenAnyIP(port, listenOptions =>
+  options.ListenLocalhost(port, listenOptions =>
   {
     listenOptions.Protocols = HttpProtocols.Http2;
   });
