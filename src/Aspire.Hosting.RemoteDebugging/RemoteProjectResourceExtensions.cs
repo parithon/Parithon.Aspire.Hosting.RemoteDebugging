@@ -168,17 +168,16 @@ public static class RemoteProjectResourceExtensions
         nameof(serviceName));
     }
 
-    // Materialize defaults and validate text values used in sc.exe commands.
-    var resolvedDisplayName = displayName ?? resource.Name;
-    var resolvedDescription = description ?? $"Aspire remote project: {resource.Name}";
-
-    ValidateWindowsServiceTextForSc(resolvedDisplayName, nameof(displayName));
-    ValidateWindowsServiceTextForSc(resolvedDescription, nameof(description));
+    // Validate optional text values used in sc.exe commands (only when explicitly provided).
+    if (displayName is not null)
+      ValidateWindowsServiceTextForSc(displayName, nameof(displayName));
+    if (description is not null)
+      ValidateWindowsServiceTextForSc(description, nameof(description));
 
     resource.Annotations.Add(new WindowsServiceAnnotation(resolvedServiceName)
     {
-      DisplayName = resolvedDisplayName,
-      Description = resolvedDescription,
+      DisplayName = displayName,
+      Description = description,
     });
 
     return builder;

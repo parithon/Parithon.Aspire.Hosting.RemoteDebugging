@@ -70,16 +70,18 @@ public class AsWindowsServiceExtensionTests
   }
 
   [TestMethod]
-  public void AsWindowsService_DefaultDisplayNameAndDescription_AreDerivedFromResourceName()
+  public void AsWindowsService_DefaultDisplayNameAndDescription_AreNullWhenNotExplicitlySet()
   {
     var appBuilder = DistributedApplication.CreateBuilder();
     var builder = BuildProjectOn(appBuilder, "win-dev", OSPlatform.Windows, projectName: "my-worker-app");
 
     builder.AsWindowsService();
 
+    // DisplayName and Description are intentionally null when not explicitly provided.
+    // The runner resolves defaults (resource name / "Aspire remote project: ...") at use-time.
     builder.Resource.TryGetLastAnnotation<WindowsServiceAnnotation>(out var annotation).Should().BeTrue();
-    annotation!.DisplayName.Should().Be("my-worker-app");
-    annotation.Description.Should().Be("Aspire remote project: my-worker-app");
+    annotation!.DisplayName.Should().BeNull();
+    annotation.Description.Should().BeNull();
   }
 
   [TestMethod]
