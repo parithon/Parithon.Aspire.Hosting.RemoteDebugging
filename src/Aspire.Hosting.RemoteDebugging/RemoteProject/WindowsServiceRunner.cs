@@ -116,8 +116,12 @@ internal static class WindowsServiceRunner
     var dllPath   = $@"{remotePath}\{assemblyName}.dll";
     var binPath   = $"\"{dotnetExe}\" \"{dllPath}\"";
 
-    var displayName = annotation.DisplayName ?? resource.Name;
-    var description = annotation.Description ?? $"Aspire remote project: {resource.Name}";
+    var displayName = ValidateScTextArgument(
+      annotation.DisplayName ?? resource.Name,
+      nameof(annotation.DisplayName));
+    var description = ValidateScTextArgument(
+      annotation.Description ?? $"Aspire remote project: {resource.Name}",
+      nameof(annotation.Description));
 
     // Create the service.
     var createCmd = $@"sc.exe create ""{sn}"" binPath= ""{binPath}"" start= demand DisplayName= ""{displayName}""";
@@ -141,15 +145,10 @@ internal static class WindowsServiceRunner
     {
       envScript.AppendLine("$values  = @(");
       foreach (var kv in environment)
-        envScript.AppendLine($"  '{kv.Key}={EscapePsString(kv.Value)}'");
-      envScript.AppendLine(")");
-      envScript.AppendLine("Set-ItemProperty -Path $regPath -Name 'Environment' -Value $values -Type MultiString");
-    }
-    if (environment.Count > 0)
-    {
-      envScript.AppendLine("$values  = @(");
-      foreach (var kv in environment)
-        envScript.AppendLine($"  '{kv.Key}={EscapePsString(kv.Value)}'");
+      {
+        var key = ValidateEnvironmentVariableKey(kv.Key, nameof(environment));
+        envScript.AppendLine($"  '{EscapePsString(key)}={EscapePsString(kv.Value)}'");
+      }
       envScript.AppendLine(")");
       envScript.AppendLine("Set-ItemProperty -Path $regPath -Name 'Environment' -Value $values -Type MultiString");
     }
@@ -330,6 +329,52 @@ internal static class WindowsServiceRunner
 
   /// <summary>Escapes a string value for safe embedding inside a PowerShell single-quoted string.</summary>
   private static string EscapePsString(string value) => value.Replace("'", "''");
+
+  /// <summary>
+  /// Validates an environment-variable key before writing it into the PowerShell script.
+  /// Rejects characters that can break key/value format or shell parsing.
+  /// </summary>
+  private static string ValidateEnvironmentVariableKey(string key, string argumentName)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(key, argumentName);
+
+    if (key.Contains('=')
+      || key.Contains('\0')
+      || key.Contains('\r')
+      || key.Contains('\n')
+      || key.Contains('"')
+      || key.IndexOfAny(['&', '|', ';', '<', '>', '`']) >= 0)
+    {
+      throw new ArgumentException(
+        "Environment-variable key contains invalid characters. " +
+        "The key must not include '=', NUL, line breaks, quotes, or shell metacharacters (& | ; < > `).",
+        argumentName);
+    }
+
+    return key;
+  }
+
+  /// <summary>
+  /// Validates string values embedded in quoted <c>sc.exe</c> arguments.
+  /// Rejects shell-structural characters so argument boundaries and command flow cannot be altered.
+  /// </summary>
+  private static string ValidateScTextArgument(string value, string argumentName)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(value, argumentName);
+
+    if (value.Contains('"')
+      || value.Contains('\r')
+      || value.Contains('\n')
+      || value.IndexOfAny(['&', '|', ';', '<', '>', '`']) >= 0)
+    {
+      throw new ArgumentException(
+        $"Value for '{argumentName}' contains invalid characters. " +
+        "Double quotes, line breaks, and shell metacharacters (& | ; < > `) are not allowed.",
+        argumentName);
+    }
+
+    return value;
+  }
 
   // ── Log tailer helpers ────────────────────────────────────────────────────
 

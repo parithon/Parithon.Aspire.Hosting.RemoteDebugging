@@ -208,7 +208,7 @@ public static class RemoteHostResourceExtensions
   {
     ArgumentNullException.ThrowIfNull(builder);
     ArgumentNullException.ThrowIfNull(dns);
-    ArgumentOutOfRangeException.ThrowIfEqual(port, 0, nameof(port));
+    ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(port, 0, nameof(port));
     ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65535, nameof(port));
 
     builder.Resource.Dns = dns;
@@ -368,7 +368,7 @@ public static class RemoteHostResourceExtensions
   /// Pins the vsdbg version to install on the remote host.
   /// Defaults to <c>"latest"</c> when not configured, which carries supply-chain risk.
   /// Pin to a specific version (e.g. <c>"17.13.30618.01"</c>) for reproducible installs.
-  /// Version must be "latest" or semantic versioning format (X.Y.Z).
+  /// Version must be <c>"latest"</c> or a dotted numeric version in <c>X.Y.Z</c> or <c>X.Y.Z.W</c> format.
   /// </summary>
   public static IResourceBuilder<RemoteHostResource> WithVsdbgVersion(
     this IResourceBuilder<RemoteHostResource> builder, string version)
@@ -376,12 +376,12 @@ public static class RemoteHostResourceExtensions
     ArgumentNullException.ThrowIfNull(builder);
     ArgumentException.ThrowIfNullOrWhiteSpace(version);
 
-    // Validate version format: "latest" or semantic version X.Y.Z (dots and digits only)
+    // Validate version format: "latest" or dotted numeric X.Y.Z / X.Y.Z.W
     if (!version.Equals("latest", StringComparison.OrdinalIgnoreCase)
-        && !System.Text.RegularExpressions.Regex.IsMatch(version, @"^\d+\.\d+\.\d+$"))
+      && !System.Text.RegularExpressions.Regex.IsMatch(version, @"^\d+\.\d+\.\d+(?:\.\d+)?$"))
     {
       throw new ArgumentException(
-        $"vsdbg version must be 'latest' or semantic version format 'X.Y.Z', but got '{version}'.",
+      $"vsdbg version must be 'latest' or dotted numeric format 'X.Y.Z' / 'X.Y.Z.W', but got '{version}'.",
         nameof(version));
     }
 

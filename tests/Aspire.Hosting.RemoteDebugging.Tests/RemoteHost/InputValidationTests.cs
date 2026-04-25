@@ -1,5 +1,7 @@
 using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
+using Aspire.Hosting.RemoteDebugging.RemoteHost;
 using FluentAssertions;
+using System.Runtime.InteropServices;
 
 namespace Aspire.Hosting.RemoteDebugging.Tests.RemoteHost;
 
@@ -112,5 +114,17 @@ public class InputValidationTests
     var result = KnownHostsValidator.ValidateFromFile(
       "/nonexistent/path", "host.com", 65535, "fingerprint");
     result.Should().Be(KnownHostsValidator.Result.Unknown);
+  }
+
+  [TestMethod]
+  public void RemoteHost_WithEndpoint_NegativePort_Throws()
+  {
+    var appBuilder = DistributedApplication.CreateBuilder();
+    var password = appBuilder.AddParameter("password", secret: true);
+    var host = appBuilder.AddRemoteHost("test-host", OSPlatform.Windows, new RemoteHostCredential("user", password));
+
+    Action action = () => host.WithEndpoint("host.example", -1);
+
+    action.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("port");
   }
 }

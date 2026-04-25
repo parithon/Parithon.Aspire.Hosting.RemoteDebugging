@@ -86,6 +86,19 @@ public static class RemoteProjectResourceExtensions
     ArgumentException.ThrowIfNullOrWhiteSpace(key);
     ArgumentNullException.ThrowIfNull(value);
 
+    if (key.Contains('=')
+      || key.Contains('\0')
+      || key.Contains('\r')
+      || key.Contains('\n')
+      || key.Contains('"')
+      || key.IndexOfAny(['&', '|', ';', '<', '>', '`']) >= 0)
+    {
+      throw new ArgumentException(
+        "Environment-variable key contains invalid characters. " +
+        "The key must not include '=', NUL, line breaks, quotes, or shell metacharacters (& | ; < > `).",
+        nameof(key));
+    }
+
     builder.Resource.EnvironmentVariables[key] = value;
     return builder;
   }
@@ -103,8 +116,13 @@ public static class RemoteProjectResourceExtensions
   /// <param name="displayName">
   /// Optional display name shown in the Windows Services management console.
   /// Defaults to the resource name.
+  /// Must not contain double quotes or line breaks.
   /// </param>
-  /// <param name="description">Optional service description.</param>
+  /// <param name="description">
+  /// Optional service description.
+  /// Defaults to <c>"Aspire remote project: {resourceName}"</c> and must not contain
+  /// double quotes or line breaks.
+  /// </param>
   /// <exception cref="InvalidOperationException">
   /// Thrown if the parent <see cref="RemoteHostResource"/> is not configured for Windows.
   /// </exception>
@@ -150,10 +168,17 @@ public static class RemoteProjectResourceExtensions
         nameof(serviceName));
     }
 
+    // Materialize defaults and validate text values used in sc.exe commands.
+    var resolvedDisplayName = displayName ?? resource.Name;
+    var resolvedDescription = description ?? $"Aspire remote project: {resource.Name}";
+
+    ValidateWindowsServiceTextForSc(resolvedDisplayName, nameof(displayName));
+    ValidateWindowsServiceTextForSc(resolvedDescription, nameof(description));
+
     resource.Annotations.Add(new WindowsServiceAnnotation(resolvedServiceName)
     {
-      DisplayName = displayName,
-      Description = description,
+      DisplayName = resolvedDisplayName,
+      Description = resolvedDescription,
     });
 
     return builder;
@@ -196,6 +221,23 @@ public static class RemoteProjectResourceExtensions
     });
 
     return builder;
+  }
+
+  private static void ValidateWindowsServiceTextForSc(string value, string parameterName)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(value, parameterName);
+
+    // Reject characters that can alter shell command structure on Windows.
+    if (value.Contains('"')
+      || value.Contains('\r')
+      || value.Contains('\n')
+      || value.IndexOfAny(['&', '|', ';', '<', '>', '`']) >= 0)
+    {
+      throw new ArgumentException(
+        $"Value for '{parameterName}' contains invalid characters. " +
+        "Double quotes, line breaks, and shell metacharacters (& | ; < > `) are not allowed.",
+        parameterName);
+    }
   }
 }
 

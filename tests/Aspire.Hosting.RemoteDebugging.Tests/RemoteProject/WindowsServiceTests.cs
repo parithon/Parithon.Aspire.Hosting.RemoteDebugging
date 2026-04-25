@@ -70,6 +70,19 @@ public class AsWindowsServiceExtensionTests
   }
 
   [TestMethod]
+  public void AsWindowsService_DefaultDisplayNameAndDescription_AreDerivedFromResourceName()
+  {
+    var appBuilder = DistributedApplication.CreateBuilder();
+    var builder = BuildProjectOn(appBuilder, "win-dev", OSPlatform.Windows, projectName: "my-worker-app");
+
+    builder.AsWindowsService();
+
+    builder.Resource.TryGetLastAnnotation<WindowsServiceAnnotation>(out var annotation).Should().BeTrue();
+    annotation!.DisplayName.Should().Be("my-worker-app");
+    annotation.Description.Should().Be("Aspire remote project: my-worker-app");
+  }
+
+  [TestMethod]
   public void AsWindowsService_ServiceNameWithSpaces_ThrowsArgumentException()
   {
     var appBuilder = DistributedApplication.CreateBuilder();
@@ -77,6 +90,54 @@ public class AsWindowsServiceExtensionTests
 
     // Service names with spaces would allow sc.exe command injection; they must be rejected.
     var act = () => builder.AsWindowsService(serviceName: "my worker app");
+
+    act.Should().Throw<ArgumentException>()
+      .WithMessage("*invalid characters*");
+  }
+
+  [TestMethod]
+  public void AsWindowsService_DisplayNameWithDoubleQuote_ThrowsArgumentException()
+  {
+    var appBuilder = DistributedApplication.CreateBuilder();
+    var builder = BuildProjectOn(appBuilder, "win-dev", OSPlatform.Windows);
+
+    var act = () => builder.AsWindowsService(displayName: "My \"Service\"");
+
+    act.Should().Throw<ArgumentException>()
+      .WithMessage("*invalid characters*");
+  }
+
+  [TestMethod]
+  public void AsWindowsService_DescriptionWithNewLine_ThrowsArgumentException()
+  {
+    var appBuilder = DistributedApplication.CreateBuilder();
+    var builder = BuildProjectOn(appBuilder, "win-dev", OSPlatform.Windows);
+
+    var act = () => builder.AsWindowsService(description: "line1\nline2");
+
+    act.Should().Throw<ArgumentException>()
+      .WithMessage("*invalid characters*");
+  }
+
+  [TestMethod]
+  public void AsWindowsService_DescriptionWithShellMetacharacters_ThrowsArgumentException()
+  {
+    var appBuilder = DistributedApplication.CreateBuilder();
+    var builder = BuildProjectOn(appBuilder, "win-dev", OSPlatform.Windows);
+
+    var act = () => builder.AsWindowsService(description: "safe & sc.exe stop spooler");
+
+    act.Should().Throw<ArgumentException>()
+      .WithMessage("*invalid characters*");
+  }
+
+  [TestMethod]
+  public void AsWindowsService_DisplayNameWithShellMetacharacters_ThrowsArgumentException()
+  {
+    var appBuilder = DistributedApplication.CreateBuilder();
+    var builder = BuildProjectOn(appBuilder, "win-dev", OSPlatform.Windows);
+
+    var act = () => builder.AsWindowsService(displayName: "service & sc.exe stop spooler");
 
     act.Should().Throw<ArgumentException>()
       .WithMessage("*invalid characters*");
@@ -117,6 +178,18 @@ public class AsWindowsServiceExtensionTests
 
     result.Should().BeSameAs(builder);
   }
+
+  [TestMethod]
+  public void WithEnvironment_KeyWithShellMetacharacters_ThrowsArgumentException()
+  {
+    var appBuilder = DistributedApplication.CreateBuilder();
+    var builder = BuildProjectOn(appBuilder, "win-dev", OSPlatform.Windows);
+
+    var act = () => builder.WithEnvironment("BAD&KEY", "value");
+
+    act.Should().Throw<ArgumentException>()
+      .WithParameterName("key");
+  }
 }
 
 [TestClass]
@@ -156,6 +229,19 @@ public class WindowsServiceEnvScriptTests
   }
 
   [TestMethod]
+  public void EnvVarScript_EscapesSingleQuotesInKeys()
+  {
+    const string sn = "svc";
+    var script = BuildEnvScript(sn, new Dictionary<string, string>
+    {
+      ["KEY'PART"] = "value",
+    });
+
+    // Single quotes in keys must also be doubled for PowerShell single-quoted strings.
+    script.Should().Contain("KEY''PART=value");
+  }
+
+  [TestMethod]
   public void EnvVarScript_UsesSingleQuotedStrings_NoDoubleQuotesInValues()
   {
     const string sn = "svc";
@@ -178,7 +264,7 @@ public class WindowsServiceEnvScriptTests
     sb.AppendLine($@"$regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\{serviceName}'");
     sb.AppendLine("$values  = @(");
     foreach (var kv in env)
-      sb.AppendLine($"  '{kv.Key}={Escape(kv.Value)}'");
+      sb.AppendLine($"  '{Escape(kv.Key)}={Escape(kv.Value)}'");
     sb.AppendLine(")");
     sb.AppendLine("Set-ItemProperty -Path $regPath -Name 'Environment' -Value $values -Type MultiString");
     return sb.ToString();

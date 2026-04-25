@@ -68,7 +68,7 @@ internal static class KnownHostsValidator
       }
 
       // Split into: hostsField  keyType  base64Key  [comment]
-      var parts = remainder.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+      var parts = remainder.Split((char[]?)null, 3, StringSplitOptions.RemoveEmptyEntries);
       if (parts.Length < 3) continue;
 
       var hostsField = parts[0];
