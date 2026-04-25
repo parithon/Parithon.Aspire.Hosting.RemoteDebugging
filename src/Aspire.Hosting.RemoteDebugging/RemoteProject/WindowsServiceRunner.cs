@@ -355,22 +355,23 @@ internal static class WindowsServiceRunner
     IRemoteHostTransport transport,
     CancellationToken cancellationToken)
   {
-    // .NET's EventLogLoggerProvider (activated by AddWindowsService/UseWindowsService) registers
-    // events using the entry assembly name as the ProviderName — NOT the SCM service name.
+    // Track the last-seen EventRecordId rather than using StartTime: Get-WinEvent's
+    // StartTime filter has only second-level precision, so TimeCreated.AddMilliseconds(1)
+    // does not reliably advance the cursor and the same event can be re-emitted each poll.
+    // RecordId is a monotonically-increasing integer that uniquely identifies each event.
     var source = assemblyName;
     var script = new StringBuilder();
     script.AppendLine("# Auto-generated EventLog watcher — do not edit.");
     script.AppendLine($"$source = '{EscapePsString(source)}'");
-    // Use local time with a small lookback window so events written just before
-    // the watcher started (during the startup delay) are not missed.
+    script.AppendLine("$lastId = [long]0");
     script.AppendLine("$after  = (Get-Date).AddSeconds(-10)");
     script.AppendLine($"Write-Output \"EventLog watcher active: monitoring source '$source' from $after (local)\"");
     script.AppendLine("while ($true) {");
     script.AppendLine("  try {");
     script.AppendLine("    $events = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = $source; StartTime = $after } -ErrorAction SilentlyContinue");
     script.AppendLine("    if ($events) {");
-    script.AppendLine("      $events | Sort-Object TimeCreated | ForEach-Object {");
-    script.AppendLine("        $after = $_.TimeCreated.AddMilliseconds(1)");
+    script.AppendLine("      $events | Sort-Object RecordId | Where-Object { $_.RecordId -gt $lastId } | ForEach-Object {");
+    script.AppendLine("        $lastId = $_.RecordId");
     script.AppendLine("        Write-Output \"[$($_.LevelDisplayName)] $($_.Message)\"");
     script.AppendLine("      }");
     script.AppendLine("    }");
