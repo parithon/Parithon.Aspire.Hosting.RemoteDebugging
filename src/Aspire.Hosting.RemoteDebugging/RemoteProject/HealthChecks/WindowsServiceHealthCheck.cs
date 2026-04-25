@@ -36,7 +36,7 @@ internal sealed class WindowsServiceHealthCheck<TProject>(
     try
     {
       var result = await transport.ExecuteSshCommandAsync(
-        $"sc.exe query {sn}", cancellationToken).ConfigureAwait(false);
+        $"sc.exe query \"{sn}\"", cancellationToken).ConfigureAwait(false);
       var (exit, output, error) = result;
 
       if (exit != 0 || output.IndexOf("RUNNING", StringComparison.OrdinalIgnoreCase) < 0)

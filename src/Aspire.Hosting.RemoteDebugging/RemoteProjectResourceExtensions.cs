@@ -129,9 +129,26 @@ public static class RemoteProjectResourceExtensions
         $"but it is configured for '{platformAnnotation.Platform}'.");
     }
 
-    // Build a safe SCM service name: no spaces, max 256 chars.
+    // Build a safe SCM service name from the resource name if not explicitly provided.
     var resolvedServiceName = serviceName
       ?? resource.Name.Replace(' ', '-').Replace('_', '-');
+
+    // Validate: service names must only contain safe characters for sc.exe arguments.
+    // Spaces and shell metacharacters would allow command injection via the SSH transport.
+    if (!System.Text.RegularExpressions.Regex.IsMatch(resolvedServiceName, @"^[a-zA-Z0-9._-]+$"))
+    {
+      throw new ArgumentException(
+        $"Service name '{resolvedServiceName}' contains invalid characters. " +
+        "Only alphanumerics, hyphens, underscores, and dots are allowed.",
+        nameof(serviceName));
+    }
+
+    if (resolvedServiceName.Length > 256)
+    {
+      throw new ArgumentException(
+        $"Service name '{resolvedServiceName}' exceeds the maximum length of 256 characters.",
+        nameof(serviceName));
+    }
 
     resource.Annotations.Add(new WindowsServiceAnnotation(resolvedServiceName)
     {

@@ -70,15 +70,16 @@ public class AsWindowsServiceExtensionTests
   }
 
   [TestMethod]
-  public void AsWindowsService_ServiceNameWithSpaces_ReplacesSpacesWithHyphens()
+  public void AsWindowsService_ServiceNameWithSpaces_ThrowsArgumentException()
   {
     var appBuilder = DistributedApplication.CreateBuilder();
     var builder = BuildProjectOn(appBuilder, "win-dev", OSPlatform.Windows);
 
-    builder.AsWindowsService(serviceName: "my worker app");
+    // Service names with spaces would allow sc.exe command injection; they must be rejected.
+    var act = () => builder.AsWindowsService(serviceName: "my worker app");
 
-    builder.Resource.TryGetLastAnnotation<WindowsServiceAnnotation>(out var annotation).Should().BeTrue();
-    annotation!.ServiceName.Should().Be("my worker app"); // passed through as-is; caller's responsibility
+    act.Should().Throw<ArgumentException>()
+      .WithMessage("*invalid characters*");
   }
 
   [TestMethod]

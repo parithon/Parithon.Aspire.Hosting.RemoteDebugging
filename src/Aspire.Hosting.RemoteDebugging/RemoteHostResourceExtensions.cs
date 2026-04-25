@@ -307,22 +307,31 @@ public static class RemoteHostResourceExtensions
     ArgumentNullException.ThrowIfNull(builder);
     ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-    // Validate path: must start with / (Unix) or be a drive letter (Windows).
-    // No path traversal (..), no spaces, no shell metacharacters.
-    // Allow: alphanumerics, hyphens, underscores, dots (version), forward slashes.
-    if (!System.Text.RegularExpressions.Regex.IsMatch(path, @"^[a-zA-Z0-9._/-]+$"))
+    // Validate path: no shell metacharacters, no spaces.
+    // Allow: alphanumerics, hyphens, underscores, dots, forward/back slashes, colon (Windows drive letters).
+    if (!System.Text.RegularExpressions.Regex.IsMatch(path, @"^[a-zA-Z0-9._/\\:-]+$"))
     {
       throw new ArgumentException(
         $"Deployment path contains invalid characters: '{path}'. " +
-        $"Only alphanumerics, hyphens, underscores, dots, and forward slashes are allowed.",
+        $"Only alphanumerics, hyphens, underscores, dots, slashes, and Windows drive letter colons are allowed.",
         nameof(path));
     }
 
-    // Reject path traversal attempts.
-    if (path.Contains("..") || path.EndsWith('/') == false && !path.StartsWith("/") && !System.Text.RegularExpressions.Regex.IsMatch(path, @"^[A-Z]:"))
+    // Reject path traversal.
+    if (path.Contains(".."))
     {
       throw new ArgumentException(
-        $"Deployment path is invalid: '{path}'. Must be absolute (starting with / on Unix or drive letter on Windows).",
+        $"Deployment path must not contain path traversal sequences (..): '{path}'.",
+        nameof(path));
+    }
+
+    // Require absolute path: Unix (starts with /) or Windows (starts with drive letter like C:\ or C:/).
+    var isUnixAbsolute    = path.StartsWith("/");
+    var isWindowsAbsolute = System.Text.RegularExpressions.Regex.IsMatch(path, @"^[A-Za-z]:[/\\]");
+    if (!isUnixAbsolute && !isWindowsAbsolute)
+    {
+      throw new ArgumentException(
+        $"Deployment path must be absolute (start with / on Unix or a drive letter like C:\\ on Windows): '{path}'.",
         nameof(path));
     }
 

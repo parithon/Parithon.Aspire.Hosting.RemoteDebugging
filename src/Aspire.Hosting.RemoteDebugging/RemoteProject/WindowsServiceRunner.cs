@@ -47,7 +47,7 @@ internal static class WindowsServiceRunner
     // NOTE: sc.exe exit codes are NOT reliably propagated through PowerShell (PowerShell
     // exits 0 regardless). We must check both the exit code AND the text output.
     var (exit, output, error) = await transport.ExecuteSshCommandAsync(
-      $"sc.exe query {sn}", cancellationToken).ConfigureAwait(false);
+      $"sc.exe query \"{sn}\"", cancellationToken).ConfigureAwait(false);
 
     if (ScServiceNotFound(exit, output, error))
     {
@@ -69,14 +69,14 @@ internal static class WindowsServiceRunner
       await EnsureLogTailerStoppedAsync(TailerProcessName(sn), transport, logger).ConfigureAwait(false);
 
     // Stop (ignore errors — it may already be stopped).
-    await transport.ExecuteSshCommandAsync($"sc.exe stop {sn}", cancellationToken).ConfigureAwait(false);
+    await transport.ExecuteSshCommandAsync($"sc.exe stop \"{sn}\"", cancellationToken).ConfigureAwait(false);
 
     // Poll until the service reaches STOPPED (or is not found) before attempting delete.
     await WaitForServiceStoppedAsync(sn, transport, logger, cancellationToken).ConfigureAwait(false);
 
     // Delete.
     var (delExit, _, delErr) = await transport.ExecuteSshCommandAsync(
-      $"sc.exe delete {sn}", cancellationToken).ConfigureAwait(false);
+      $"sc.exe delete \"{sn}\"", cancellationToken).ConfigureAwait(false);
 
     if (delExit != 0)
       logger.LogWarning("sc.exe delete '{ServiceName}' exited {Code}: {Error}", sn, delExit, delErr.Trim());
@@ -120,7 +120,7 @@ internal static class WindowsServiceRunner
     var description = annotation.Description ?? $"Aspire remote project: {resource.Name}";
 
     // Create the service.
-    var createCmd = $@"sc.exe create {sn} binPath= ""{binPath}"" start= demand DisplayName= ""{displayName}""";
+    var createCmd = $@"sc.exe create ""{sn}"" binPath= ""{binPath}"" start= demand DisplayName= ""{displayName}""";
     var (createExit, _, createErr) = await transport.ExecuteSshCommandAsync(createCmd, cancellationToken).ConfigureAwait(false);
     if (createExit != 0)
       throw new InvalidOperationException(
@@ -130,7 +130,7 @@ internal static class WindowsServiceRunner
 
     // Set description.
     await transport.ExecuteSshCommandAsync(
-      $"sc.exe description {sn} \"{description}\"", cancellationToken).ConfigureAwait(false);
+      $"sc.exe description \"{sn}\" \"{description}\"", cancellationToken).ConfigureAwait(false);
 
     // Write env vars to the service registry key so they are available to LocalSystem.
     // We upload a .ps1 script via SFTP and execute it with -File to avoid SSH quoting issues
@@ -196,7 +196,7 @@ internal static class WindowsServiceRunner
 
     // Start the SCM service.
     var (startExit, _, startErr) = await transport.ExecuteSshCommandAsync(
-      $"sc.exe start {sn}", cancellationToken).ConfigureAwait(false);
+      $"sc.exe start \"{sn}\"", cancellationToken).ConfigureAwait(false);
     if (startExit != 0)
       throw new InvalidOperationException($"Failed to start Windows Service '{sn}' (exit {startExit}): {startErr.Trim()}");
 
@@ -255,7 +255,7 @@ internal static class WindowsServiceRunner
 
     // Stop the Windows Service (ignore errors — it may have already stopped).
     var (stopExit, _, stopErr) = await transport.ExecuteSshCommandAsync(
-      $"sc.exe stop {sn}", cancellationToken).ConfigureAwait(false);
+      $"sc.exe stop \"{sn}\"", cancellationToken).ConfigureAwait(false);
     if (stopExit != 0)
       logger.LogDebug("sc.exe stop '{ServiceName}' exited {Code}: {Error}", sn, stopExit, stopErr.Trim());
     else
@@ -266,7 +266,7 @@ internal static class WindowsServiceRunner
 
     // Uninstall the service.
     var (delExit, _, delErr) = await transport.ExecuteSshCommandAsync(
-      $"sc.exe delete {sn}", CancellationToken.None).ConfigureAwait(false);
+      $"sc.exe delete \"{sn}\"", CancellationToken.None).ConfigureAwait(false);
     if (delExit != 0)
       logger.LogWarning("sc.exe delete '{ServiceName}' exited {Code}: {Error}", sn, delExit, delErr.Trim());
     else
@@ -295,7 +295,7 @@ internal static class WindowsServiceRunner
     while (!linked.Token.IsCancellationRequested)
     {
       var (exit, output, error) = await transport.ExecuteSshCommandAsync(
-        $"sc.exe query {serviceName}", linked.Token).ConfigureAwait(false);
+        $"sc.exe query \"{serviceName}\"", linked.Token).ConfigureAwait(false);
 
       if (ScServiceNotFound(exit, output, error))
         return;

@@ -49,7 +49,7 @@ public class WindowsServiceRunnerTests
   }
 
   [TestMethod]
-  public void ServiceName_WithSpaces_IsPassedAsIs()
+  public void ServiceName_WithSpaces_ThrowsArgumentException()
   {
     var appBuilder = DistributedApplication.CreateBuilder();
     var passwordParam = appBuilder.AddParameter("password", secret: true);
@@ -57,10 +57,11 @@ public class WindowsServiceRunnerTests
     var hostBuilder = appBuilder.AddRemoteHost("win-dev", OSPlatform.Windows, credential);
     var builder = appBuilder.AddRemoteProject<FakeProject>("worker", hostBuilder);
 
-    builder.AsWindowsService("my worker app");
+    // Spaces in service names enable sc.exe command injection; validate and reject.
+    Action act = () => builder.AsWindowsService("my worker app");
 
-    builder.Resource.TryGetLastAnnotation<WindowsServiceAnnotation>(out var annotation).Should().BeTrue();
-    annotation!.ServiceName.Should().Be("my worker app");
+    act.Should().Throw<ArgumentException>()
+      .WithMessage("*invalid characters*");
   }
 
   // ── Environment variable script generation ─────────────────────────────────
