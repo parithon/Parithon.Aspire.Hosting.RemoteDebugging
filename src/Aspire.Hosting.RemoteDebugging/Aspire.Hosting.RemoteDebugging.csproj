@@ -20,7 +20,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting" Version="13.2.3" />
+    <PackageReference Include="Aspire.Hosting" Version="13.2.4" />
     <PackageReference Include="Google.Protobuf" Version="3.33.5" />
     <PackageReference Include="Grpc.Net.Client" Version="2.76.0" />
     <PackageReference Include="Grpc.Tools" Version="2.76.0" PrivateAssets="All" />
@@ -30,9 +30,7 @@
 
   <ItemGroup>
     <!-- Generate only the client-side stubs from the sidecar proto. -->
-    <Protobuf Include="..\Aspire.Hosting.RemoteDebugging.Sidecar\Protos\sidecar.proto"
-              GrpcServices="Client"
-              Access="Internal" />
+    <Protobuf Include="..\Aspire.Hosting.RemoteDebugging.Sidecar\Protos\sidecar.proto" GrpcServices="Client" Access="Internal" />
   </ItemGroup>
 
   <ItemGroup>
@@ -44,10 +42,7 @@
     ReferenceOutputAssembly=false keeps its DLL out of this library's references.
   -->
   <ItemGroup>
-    <ProjectReference Include="..\Aspire.Hosting.RemoteDebugging.Sidecar\Aspire.Hosting.RemoteDebugging.Sidecar.csproj"
-                      ReferenceOutputAssembly="false"
-                      Private="false"
-                      SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="..\Aspire.Hosting.RemoteDebugging.Sidecar\Aspire.Hosting.RemoteDebugging.Sidecar.csproj" ReferenceOutputAssembly="false" Private="false" SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
 
   <!--
@@ -56,16 +51,12 @@
     sidecar files from tools/sidecar/ to the consumer's output directory.
   -->
   <ItemGroup>
-    <None Include="Aspire.Hosting.RemoteDebugging.targets"
-          Pack="true"
-          PackagePath="build/Aspire.Hosting.RemoteDebugging.targets" />
+    <None Include="Aspire.Hosting.RemoteDebugging.targets" Pack="true" PackagePath="build/Aspire.Hosting.RemoteDebugging.targets" />
   </ItemGroup>
 
   <!-- Step 1: Publish the sidecar to the staging directory. -->
   <Target Name="PublishSidecar" AfterTargets="Build">
-    <MSBuild Projects="..\Aspire.Hosting.RemoteDebugging.Sidecar\Aspire.Hosting.RemoteDebugging.Sidecar.csproj"
-             Targets="Publish"
-             Properties="Configuration=$(Configuration);PublishDir=$([MSBuild]::NormalizeDirectory('$(_SidecarStagingDir)'));SelfContained=false;UseAppHost=false" />
+    <MSBuild Projects="..\Aspire.Hosting.RemoteDebugging.Sidecar\Aspire.Hosting.RemoteDebugging.Sidecar.csproj" Targets="Publish" Properties="Configuration=$(Configuration);PublishDir=$([MSBuild]::NormalizeDirectory('$(_SidecarStagingDir)'));SelfContained=false;UseAppHost=false" />
   </Target>
 
   <!--
@@ -76,9 +67,7 @@
     <ItemGroup>
       <_SidecarCopyFile Include="$(_SidecarStagingDir)**/*" />
     </ItemGroup>
-    <Copy SourceFiles="@(_SidecarCopyFile)"
-          DestinationFiles="@(_SidecarCopyFile->'$(OutputPath)sidecar/%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_SidecarCopyFile)" DestinationFiles="@(_SidecarCopyFile->'$(OutputPath)sidecar/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
   <!--
@@ -108,10 +97,7 @@
       <_SidecarPublishFile Include="$(_SidecarStagingDir)**/*" />
     </ItemGroup>
     <ItemGroup>
-      <None Include="@(_SidecarPublishFile)"
-            Pack="true"
-            PackagePath="tools/sidecar/%(RecursiveDir)%(Filename)%(Extension)"
-            Visible="false" />
+      <None Include="@(_SidecarPublishFile)" Pack="true" PackagePath="tools/sidecar/%(RecursiveDir)%(Filename)%(Extension)" Visible="false" />
     </ItemGroup>
   </Target>
 

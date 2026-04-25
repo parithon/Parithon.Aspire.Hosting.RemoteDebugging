@@ -46,11 +46,13 @@ internal static class WindowsServiceRunner
     // from a previous session (the sidecar keeps running between AppHost restarts).
     await EnsureLogWatcherStoppedAsync(annotation, transport, logger).ConfigureAwait(false);
 
-    // Query the service; exit code 1060 means it does not exist — that is the happy path.
-    var (exit, _, _) = await transport.ExecuteSshCommandAsync(
+    // Query the service.
+    // NOTE: sc.exe exit codes are NOT reliably propagated through PowerShell (PowerShell
+    // exits 0 regardless). We must check both the exit code AND the text output.
+    var (exit, output, error) = await transport.ExecuteSshCommandAsync(
       $"sc.exe query {sn}", cancellationToken).ConfigureAwait(false);
 
-    if (exit == 1060)
+    if (ScServiceNotFound(exit, output, error))
     {
       logger.LogDebug("Windows Service '{ServiceName}' not found — no cleanup needed.", sn);
       return;
@@ -127,33 +129,41 @@ internal static class WindowsServiceRunner
     // Write env vars to the service registry key so they are available to LocalSystem.
     // We upload a .ps1 script via SFTP and execute it with -File to avoid SSH quoting issues
     // (double-quotes inside -Command are stripped by the SSH shell on Windows).
+    //
+    // Also pre-register the EventLog source for this assembly so .NET's EventLogLoggerProvider
+    // (activated by AddWindowsService / UseWindowsService) can write events without failing
+    // silently.  Creating a source requires admin rights — the same rights needed for sc.exe create.
+    var envScript = new StringBuilder();
+    envScript.AppendLine($@"$regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\{sn}'");
+    envScript.AppendLine($"# Pre-register EventLog source so .NET EventLogLoggerProvider can write events.");
+    envScript.AppendLine($"if (-not [System.Diagnostics.EventLog]::SourceExists('{EscapePsString(assemblyName)}')) {{");
+    envScript.AppendLine($"    [System.Diagnostics.EventLog]::CreateEventSource('{EscapePsString(assemblyName)}', 'Application')");
+    envScript.AppendLine("}");
     if (environment.Count > 0)
     {
-      var envScript = new StringBuilder();
-      envScript.AppendLine($@"$regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\{sn}'");
       envScript.AppendLine("$values  = @(");
       foreach (var kv in environment)
         envScript.AppendLine($"  '{kv.Key}={EscapePsString(kv.Value)}'");
       envScript.AppendLine(")");
       envScript.AppendLine("Set-ItemProperty -Path $regPath -Name 'Environment' -Value $values -Type MultiString");
-
-      var envScriptPath = $@"{remotePath}\set-env.ps1";
-      await transport.UploadTextAsync(envScript.ToString(), envScriptPath, cancellationToken).ConfigureAwait(false);
-
-      var (regExit, _, regErr) = await transport.ExecuteSshCommandAsync(
-        $@"powershell.exe -NonInteractive -ExecutionPolicy Bypass -File ""{envScriptPath}""",
-        cancellationToken).ConfigureAwait(false);
-
-      if (regExit != 0)
-        logger.LogWarning(
-          "Failed to set environment variables for service '{ServiceName}' (exit {Code}): {Error}",
-          sn, regExit, regErr.Trim());
-      else
-        logger.LogDebug("Set {Count} environment variable(s) for service '{ServiceName}'.", environment.Count, sn);
     }
 
+    var envScriptPath = $@"{remotePath}\set-env.ps1";
+    await transport.UploadTextAsync(envScript.ToString(), envScriptPath, cancellationToken).ConfigureAwait(false);
+
+    var (regExit, _, regErr) = await transport.ExecuteSshCommandAsync(
+      $@"powershell.exe -NonInteractive -ExecutionPolicy Bypass -File ""{envScriptPath}""",
+      cancellationToken).ConfigureAwait(false);
+
+    if (regExit != 0)
+      logger.LogWarning(
+        "Failed to configure service '{ServiceName}' (exit {Code}): {Error}",
+        sn, regExit, regErr.Trim());
+    else
+      logger.LogDebug("Configured service '{ServiceName}' ({Count} env var(s), EventLog source registered).", sn, environment.Count);
+
     // Upload the EventLog log-watcher script.
-    await UploadLogWatcherScriptAsync(annotation, remotePath, transport, cancellationToken).ConfigureAwait(false);
+    await UploadLogWatcherScriptAsync(annotation, assemblyName, remotePath, transport, cancellationToken).ConfigureAwait(false);
 
     logger.LogInformation("Windows Service '{ServiceName}' installed at '{BinPath}'.", sn, binPath);
   }
@@ -182,6 +192,19 @@ internal static class WindowsServiceRunner
       throw new InvalidOperationException($"Failed to start Windows Service '{sn}' (exit {startExit}): {startErr.Trim()}");
 
     logger.LogInformation("Windows Service '{ServiceName}' started.", sn);
+
+    // Give the service a moment to start up and write its first EventLog entries,
+    // then run a diagnostic query to see what source names are present in the
+    // Application log.  This helps diagnose EventLog source mismatches.
+    await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+    var diagScript = @"Get-WinEvent -FilterHashtable @{ LogName='Application'; StartTime=(Get-Date).AddMinutes(-2) } -MaxEvents 20 -ErrorAction SilentlyContinue | Group-Object ProviderName | Select-Object Count,Name | Format-Table -AutoSize";
+    var (_, diagOut, _) = await transport.ExecuteSshCommandAsync(
+      $@"powershell.exe -NonInteractive -Command ""{diagScript}""",
+      cancellationToken).ConfigureAwait(false);
+    if (!string.IsNullOrWhiteSpace(diagOut))
+      logger.LogDebug("Recent Application EventLog sources (last 2 min): {Sources}", diagOut.Trim());
+    else
+      logger.LogDebug("No Application EventLog entries found in the last 2 minutes.");
 
     if (transport.SidecarChannel is null)
     {
@@ -221,12 +244,24 @@ internal static class WindowsServiceRunner
   /// <summary>
   /// Stops the Windows Service and the sidecar log-watcher, then removes (uninstalls) the service.
   /// </summary>
-  public static async Task StopAndUninstallAsync<TProject>(
+  public static Task StopAndUninstallAsync<TProject>(
     RemoteProjectResource<TProject> resource,
     WindowsServiceAnnotation annotation,
     IRemoteHostTransport transport,
     ILogger logger,
     CancellationToken cancellationToken) where TProject : IProjectMetadata
+    => StopAndUninstallAsync(annotation, transport, logger, cancellationToken);
+
+  /// <summary>
+  /// Stops the Windows Service and the sidecar log-watcher, then removes (uninstalls) the service.
+  /// Called by <see cref="RemoteHostShutdownService"/> during AppHost shutdown where no typed
+  /// <see cref="RemoteProjectResource{TProject}"/> is available.
+  /// </summary>
+  internal static async Task StopAndUninstallAsync(
+    WindowsServiceAnnotation annotation,
+    IRemoteHostTransport transport,
+    ILogger logger,
+    CancellationToken cancellationToken)
   {
     var sn = annotation.ServiceName;
 
@@ -321,26 +356,33 @@ internal static class WindowsServiceRunner
   /// <summary>
   /// Generates and uploads <c>watcher.ps1</c> to the remote deployment directory.
   /// The script polls the Windows Application Event Log for entries whose Source matches
-  /// the service name and writes them to stdout so the sidecar can capture them.
+  /// the assembly name (the source registered by .NET's <c>EventLogLoggerProvider</c>)
+  /// and writes them to stdout so the sidecar can capture them.
   /// </summary>
   private static async Task UploadLogWatcherScriptAsync(
     WindowsServiceAnnotation annotation,
+    string assemblyName,
     string remotePath,
     IRemoteHostTransport transport,
     CancellationToken cancellationToken)
   {
-    var sn = annotation.ServiceName;
+    // .NET's EventLogLoggerProvider (activated by AddWindowsService/UseWindowsService) registers
+    // events using the entry assembly name as the ProviderName — NOT the SCM service name.
+    var source = assemblyName;
     var script = new StringBuilder();
     script.AppendLine("# Auto-generated EventLog watcher — do not edit.");
-    script.AppendLine($"$source = '{sn}'");
-    script.AppendLine("$after  = [datetime]::UtcNow");
+    script.AppendLine($"$source = '{EscapePsString(source)}'");
+    // Use local time with a small lookback window so events written just before
+    // the watcher started (during the startup delay) are not missed.
+    script.AppendLine("$after  = (Get-Date).AddSeconds(-10)");
+    script.AppendLine($"Write-Output \"EventLog watcher active: monitoring source '$source' from $after (local)\"");
     script.AppendLine("while ($true) {");
     script.AppendLine("  try {");
     script.AppendLine("    $events = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = $source; StartTime = $after } -ErrorAction SilentlyContinue");
     script.AppendLine("    if ($events) {");
     script.AppendLine("      $events | Sort-Object TimeCreated | ForEach-Object {");
     script.AppendLine("        $after = $_.TimeCreated.AddMilliseconds(1)");
-    script.AppendLine("        Write-Host \"[$($_.LevelDisplayName)] $($_.Message)\"");
+    script.AppendLine("        Write-Output \"[$($_.LevelDisplayName)] $($_.Message)\"");
     script.AppendLine("      }");
     script.AppendLine("    }");
     script.AppendLine("  } catch { }");
@@ -353,8 +395,12 @@ internal static class WindowsServiceRunner
 
   /// <summary>
   /// Polls <c>sc.exe query</c> until the service reaches the <c>STOPPED</c> state or is
-  /// no longer found (exit 1060). Waits up to 30 seconds before giving up.
+  /// no longer found. Waits up to 30 seconds before giving up.
   /// </summary>
+  /// <remarks>
+  /// sc.exe exit codes are NOT reliably propagated through PowerShell (the SSH shell on
+  /// Windows), so we inspect the text output as well as the numeric exit code.
+  /// </remarks>
   private static async Task WaitForServiceStoppedAsync(
     string serviceName,
     IRemoteHostTransport transport,
@@ -366,20 +412,38 @@ internal static class WindowsServiceRunner
 
     while (!linked.Token.IsCancellationRequested)
     {
-      var (exit, output, _) = await transport.ExecuteSshCommandAsync(
+      var (exit, output, error) = await transport.ExecuteSshCommandAsync(
         $"sc.exe query {serviceName}", linked.Token).ConfigureAwait(false);
 
-      if (exit == 1060)
-        return; // service no longer exists
-
-      if (output.Contains("STOPPED", StringComparison.OrdinalIgnoreCase))
+      if (ScServiceNotFound(exit, output, error))
         return;
 
-      logger.LogDebug("Waiting for Windows Service '{ServiceName}' to reach STOPPED state…", serviceName);
+      if (output.Contains("STOPPED", StringComparison.OrdinalIgnoreCase)
+        || output.Contains("STATE : 1 ", StringComparison.OrdinalIgnoreCase))
+        return;
+
+      // Log actual sc.exe output at debug level to aid diagnosis if we get stuck.
+      logger.LogDebug(
+        "Waiting for Windows Service '{ServiceName}' to reach STOPPED state (exit={Exit}, output={Output})…",
+        serviceName, exit, output.Trim());
+
       await Task.Delay(TimeSpan.FromSeconds(1), linked.Token).ConfigureAwait(false);
     }
 
     logger.LogWarning("Windows Service '{ServiceName}' did not reach STOPPED within the timeout.", serviceName);
+  }
+
+  /// <summary>
+  /// Returns <see langword="true"/> when the <c>sc.exe query</c> response indicates the
+  /// service does not exist.  Checks both the numeric exit code (when propagated) and the
+  /// text output (needed when PowerShell is the SSH shell, as it always exits 0).
+  /// </summary>
+  private static bool ScServiceNotFound(int exit, string output, string error)
+  {
+    if (exit == 1060) return true;
+    var combined = output + error;
+    return combined.Contains("1060", StringComparison.Ordinal)
+      || combined.Contains("does not exist", StringComparison.OrdinalIgnoreCase);
   }
 
   /// <summary>Escapes a string value for safe embedding inside a PowerShell single-quoted string.</summary>
