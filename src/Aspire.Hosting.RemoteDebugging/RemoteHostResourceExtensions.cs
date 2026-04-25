@@ -311,4 +311,44 @@ public static class RemoteHostResourceExtensions
     return builder;
   }
 
+  /// <summary>
+  /// Pins the expected SHA-256 fingerprint of the remote host's SSH public key.
+  /// The connection is rejected if the received fingerprint does not match.
+  /// </summary>
+  /// <param name="builder">The remote host resource builder.</param>
+  /// <param name="sha256Fingerprint">
+  /// The expected SHA-256 fingerprint. May optionally include the <c>SHA256:</c> prefix.
+  /// Obtain it by running <c>ssh-keyscan -t ed25519 &lt;host&gt; | ssh-keygen -lf -</c>
+  /// or inspecting the Aspire console on first connection (logged at Trace level).
+  /// </param>
+  public static IResourceBuilder<RemoteHostResource> WithHostKeyFingerprint(
+    this IResourceBuilder<RemoteHostResource> builder, string sha256Fingerprint)
+  {
+    ArgumentNullException.ThrowIfNull(builder);
+    ArgumentException.ThrowIfNullOrWhiteSpace(sha256Fingerprint);
+
+    // Strip the "SHA256:" prefix so we store only the base64 portion.
+    const string prefix = "SHA256:";
+    builder.Resource.HostKeyFingerprint = sha256Fingerprint.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+      ? sha256Fingerprint[prefix.Length..]
+      : sha256Fingerprint;
+
+    return builder;
+  }
+
+  /// <summary>
+  /// Pins the vsdbg version to install on the remote host.
+  /// Defaults to <c>"latest"</c> when not configured, which carries supply-chain risk.
+  /// Pin to a specific version (e.g. <c>"17.13.30618.01"</c>) for reproducible installs.
+  /// </summary>
+  public static IResourceBuilder<RemoteHostResource> WithVsdbgVersion(
+    this IResourceBuilder<RemoteHostResource> builder, string version)
+  {
+    ArgumentNullException.ThrowIfNull(builder);
+    ArgumentException.ThrowIfNullOrWhiteSpace(version);
+
+    builder.Resource.VsdbgVersion = version;
+    return builder;
+  }
+
 }

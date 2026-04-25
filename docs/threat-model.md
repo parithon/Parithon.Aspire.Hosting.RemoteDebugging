@@ -79,18 +79,26 @@ flowchart LR
 |-|-|
 | **Category** | Spoofing |
 | **Severity** | High |
-| **Status** | ⚠️ Open |
+| **Status** | ✅ Mitigated |
 
 **Description:**  
-`SshTransport.ConnectAsync` subscribes to `HostKeyReceived` and logs the fingerprint at `Trace` level but does **not** set `e.Result = true` (accept) or validate the fingerprint against a known-good value. SSH.NET's default behaviour is to accept any host key, making the connection vulnerable to man-in-the-middle attacks on untrusted networks.
+`SshTransport.ConnectAsync` subscribes to `HostKeyReceived` and validates the received fingerprint against the value stored via `WithHostKeyFingerprint()`. If the fingerprints do not match, `e.CanTrust = false` is set and the connection is rejected. If no fingerprint is configured, a `Warning`-level log is emitted on every connection attempt that includes the received fingerprint to make first-time configuration easy.
 
-**Impact:**  
-An attacker on the same network segment could impersonate the remote host, intercept SSH credentials and all traffic (binaries, env vars, OTEL data).
+**Mitigations (current):**
+- `WithHostKeyFingerprint(sha256)` pins the expected fingerprint on the `RemoteHostResource`.
+- Mismatch → connection rejected with an `Error`-level log.
+- Not configured → `Warning` log with the received fingerprint so developers can copy-paste it into their AppHost.
 
-**Mitigations:**
-- Add a `WithHostKeyFingerprint(string sha256)` API so developers can pin the expected fingerprint.
-- Validate `e.FingerPrintSHA256` against the pinned value in `HostKeyReceived`; set `e.Result = false` and abort if it doesn't match.
-- Document that this must be configured when the network path is not fully trusted.
+**Operator guidance:**  
+Obtain your host's fingerprint once and add it to the AppHost:
+```bash
+ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -
+```
+```csharp
+builder.AddRemoteHost("my-server", OSPlatform.Windows, credential)
+    .WithEndpoint("192.168.1.100", TransportType.SSH, 22)
+    .WithHostKeyFingerprint("abc123...your-fingerprint-here");
+```
 
 ---
 
@@ -160,22 +168,24 @@ The sidecar gRPC service (`aspire-sidecar`) listens on TCP port 5055 with no TLS
 |-|-|
 | **Category** | Tampering / Supply Chain |
 | **Severity** | Medium |
-| **Status** | ⚠️ Open |
+| **Status** | ✅ Mitigated |
 
 **Description:**  
-`SshTransport.InstallRemoteDebugger` downloads `vsdbg` via:
-- **Linux:** `curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v latest -l <path>`
-- **Windows:** equivalent PowerShell `iex`
-
-The `| bash` pattern executes remotely fetched code without signature verification. If the Microsoft CDN were compromised, or if a DNS/network attacker redirected the URL, arbitrary code could execute on the remote host.
+`SshTransport.InstallRemoteDebugger` downloads `vsdbg` from Microsoft's CDN. Previously hardcoded to `"latest"`, the version is now configurable via `WithVsdbgVersion()`. A `Warning`-level log is emitted when `"latest"` is used to prompt developers to pin a specific version.
 
 **Mitigations (current):**
+- `WithVsdbgVersion("x.y.z")` pins vsdbg to a specific, reproducible build.
+- When `"latest"` is used (the default), a warning is logged on every install.
 - The URL is a Microsoft-owned short-link (`aka.ms`) served over HTTPS.
-- The connection is made from the remote host outbound, not through the SSH tunnel.
 
-**Recommended improvement:**
-- Pin `vsdbg` to a known version (e.g., `-v 17.x.y`) rather than `latest`.
-- Verify a checksum after download before execution.
+**Operator guidance:**  
+Pin the vsdbg version in your AppHost for reproducible, supply-chain-safe installs:
+```csharp
+builder.AddRemoteHost("my-server", OSPlatform.Windows, credential)
+    .WithVsdbgVersion("17.13.30618.01");
+```
+
+**Residual risk:** The vsdbg installer script itself is still fetched dynamically over HTTPS without a checksum. This is an inherent limitation of Microsoft's vsdbg distribution mechanism.
 
 ---
 
@@ -245,11 +255,11 @@ The sidecar `ConnectionMonitor` shuts down all managed processes after 5 minutes
 
 ## Recommended Improvements (Priority Order)
 
-| # | Threat | Action |
-|---|--------|--------|
-| 1 | T1 — Host key spoofing | Add `WithHostKeyFingerprint()` API and enforce validation in `HostKeyReceived` |
-| 2 | T3 — Unauthenticated sidecar | Bind sidecar to `127.0.0.1` only, or add a per-session bearer token to gRPC RPCs |
-| 3 | T5 — vsdbg supply chain | Pin vsdbg to a specific version; verify SHA-256 checksum after download |
+| # | Threat | Action | Status |
+|---|--------|--------|--------|
+| 1 | T1 — Host key spoofing | `WithHostKeyFingerprint()` added; warn when not configured | ✅ Done |
+| 2 | T3 — Unauthenticated sidecar | Bind sidecar to `127.0.0.1` only, or add a per-session bearer token to gRPC RPCs | ⚠️ Open |
+| 3 | T5 — vsdbg supply chain | `WithVsdbgVersion()` added; warn when using `"latest"` | ✅ Done |
 
 ---
 

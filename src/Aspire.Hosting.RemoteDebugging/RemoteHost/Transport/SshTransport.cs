@@ -90,6 +90,26 @@ internal sealed class SshTransport : IRemoteHostTransport
       {
         logger.LogTrace("SSH host key received: {HostKeyName} SHA256:{Fingerprint}", e.HostKeyName, e.FingerPrintSHA256);
       }
+
+      var expectedFingerprint = resource.HostKeyFingerprint;
+      if (expectedFingerprint is not null)
+      {
+        if (!string.Equals(e.FingerPrintSHA256, expectedFingerprint, StringComparison.OrdinalIgnoreCase))
+        {
+          logger.LogError(
+            "SSH host key fingerprint mismatch for {Dns}. Expected SHA256:{Expected} but received SHA256:{Received}. " +
+            "Connection rejected. Update WithHostKeyFingerprint() if the host key has legitimately changed.",
+            dns, expectedFingerprint, e.FingerPrintSHA256);
+          e.CanTrust = false;
+        }
+      }
+      else
+      {
+        logger.LogWarning(
+          "SSH host key verification is disabled for {Dns}. Call .WithHostKeyFingerprint() on the remote host " +
+          "resource to enable it and prevent man-in-the-middle attacks. Expected fingerprint: SHA256:{Fingerprint}",
+          dns, e.FingerPrintSHA256);
+      }
     };
     _client.ServerIdentificationReceived += (s, e) =>
     {
@@ -229,8 +249,16 @@ internal sealed class SshTransport : IRemoteHostTransport
 
     if (_resource.TryGetLastAnnotation<RemoteHostOSPlatformAnnotation>(out var platformAnnotation) && platformAnnotation is not null)
     {
+      var vsdbgVersion = _resource.VsdbgVersion;
+      if (string.Equals(vsdbgVersion, "latest", StringComparison.OrdinalIgnoreCase))
+      {
+        logger.LogWarning(
+          "vsdbg is configured to install the 'latest' version. Pin a specific version with " +
+          ".WithVsdbgVersion(\"x.y.z\") to ensure reproducible installs and reduce supply-chain risk.");
+      }
+
       var debuggerPath = GetRemoteToolsPath(platformAnnotation.Platform);
-      var pwshInstallCommand = $"iwr -Uri https://aka.ms/getvsdbgps1 -OutFile $env:TEMP\\getvsdbg.ps1; & $env:TEMP\\getvsdbg.ps1 -Version latest -InstallPath {debuggerPath}";
+      var pwshInstallCommand = $"iwr -Uri https://aka.ms/getvsdbgps1 -OutFile $env:TEMP\\getvsdbg.ps1; & $env:TEMP\\getvsdbg.ps1 -Version {vsdbgVersion} -InstallPath {debuggerPath}";
       var installCommand = platformAnnotation.Platform switch
       {
           var p when p == OSPlatform.Windows => _shell switch
@@ -241,7 +269,7 @@ internal sealed class SshTransport : IRemoteHostTransport
               _ => throw new InvalidOperationException($"Unsupported shell: '{_shell}'. Expected 'powershell.exe', 'pwsh.exe', or 'cmd.exe'.")
           },
           var p when p == OSPlatform.Linux =>
-              $"curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v latest -l {debuggerPath}",
+              $"curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v {vsdbgVersion} -l {debuggerPath}",
           var p => throw new PlatformNotSupportedException($"Platform '{p}' is not supported for vsdbg installation.")
       };
       

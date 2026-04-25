@@ -29,6 +29,21 @@ public sealed class RemoteHostResource(string name)
   /// </summary>
   public string DeploymentPath { get; set; } = "/tmp";
 
+  /// <summary>
+  /// Expected SHA-256 fingerprint of the remote host's SSH public key (without the "SHA256:" prefix).
+  /// When set, the SSH connection is rejected if the received fingerprint does not match.
+  /// When <see langword="null"/>, host key verification is skipped and a warning is emitted.
+  /// Configure with <c>.WithHostKeyFingerprint(...)</c>.
+  /// </summary>
+  public string? HostKeyFingerprint { get; set; }
+
+  /// <summary>
+  /// The version of vsdbg to install on the remote host. Defaults to <c>"latest"</c>.
+  /// Pin to a specific version (e.g. <c>"17.13.30618.01"</c>) to avoid supply-chain risk
+  /// from fetching an unverified latest build. Configure with <c>.WithVsdbgVersion(...)</c>.
+  /// </summary>
+  public string VsdbgVersion { get; set; } = "latest";
+
   internal IResourceBuilder<ParameterResource>? DnsParameter { get; set; }
   internal IResourceBuilder<ParameterResource>? PortParameter { get; set; }
 
