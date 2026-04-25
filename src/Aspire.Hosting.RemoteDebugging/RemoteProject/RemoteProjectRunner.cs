@@ -194,14 +194,10 @@ internal static class RemoteProjectRunner
       // Phase 3b: Install the service.
       var env = BuildEnvironment(resource);
 
-      // Explicitly set the EventLog source name so .NET's EventLogLoggerProvider
-      // (activated by AddWindowsService) writes events under a name that:
-      //   (a) matches what we pre-register via CreateEventSource in set-env.ps1, and
-      //   (b) matches the ProviderName filter in watcher.ps1.
-      // Without this, AddEventLog() uses a default source ("Application" or process name)
-      // that does not match the watcher's filter and events are never captured.
-      if (resource.AssemblyName is string asmName)
-        env["Logging__EventLog__SourceName"] = asmName;
+      // Explicitly pin EventLog source = SCM service name.  .NET's EventLogLoggerProvider
+      // (activated by AddWindowsService) defaults to the service name when running under SCM.
+      // Pinning it here guarantees the watcher.ps1 ProviderName filter always matches.
+      env["Logging__EventLog__SourceName"] = svcAnnotation.ServiceName;
       try
       {
         await WindowsServiceRunner.InstallAsync(resource, svcAnnotation, transport, env, logger, cancellationToken)

@@ -130,14 +130,15 @@ internal static class WindowsServiceRunner
     // We upload a .ps1 script via SFTP and execute it with -File to avoid SSH quoting issues
     // (double-quotes inside -Command are stripped by the SSH shell on Windows).
     //
-    // Also pre-register the EventLog source for this assembly so .NET's EventLogLoggerProvider
-    // (activated by AddWindowsService / UseWindowsService) can write events without failing
-    // silently.  Creating a source requires admin rights — the same rights needed for sc.exe create.
+    // Pre-register the EventLog source using the SCM service name.  .NET's EventLogLoggerProvider
+    // (activated by AddWindowsService) defaults to writing events under the service name, so using
+    // the same name here keeps the source aligned with what the watcher.ps1 filters on.
+    // Creating a source requires admin rights — the same rights needed for sc.exe create.
     var envScript = new StringBuilder();
     envScript.AppendLine($@"$regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\{sn}'");
     envScript.AppendLine($"# Pre-register EventLog source so .NET EventLogLoggerProvider can write events.");
-    envScript.AppendLine($"if (-not [System.Diagnostics.EventLog]::SourceExists('{EscapePsString(assemblyName)}')) {{");
-    envScript.AppendLine($"    [System.Diagnostics.EventLog]::CreateEventSource('{EscapePsString(assemblyName)}', 'Application')");
+    envScript.AppendLine($"if (-not [System.Diagnostics.EventLog]::SourceExists('{EscapePsString(sn)}')) {{");
+    envScript.AppendLine($"    [System.Diagnostics.EventLog]::CreateEventSource('{EscapePsString(sn)}', 'Application')");
     envScript.AppendLine("}");
     if (environment.Count > 0)
     {
@@ -162,8 +163,9 @@ internal static class WindowsServiceRunner
     else
       logger.LogDebug("Configured service '{ServiceName}' ({Count} env var(s), EventLog source registered).", sn, environment.Count);
 
-    // Upload the EventLog log-watcher script.
-    await UploadLogWatcherScriptAsync(annotation, assemblyName, remotePath, transport, cancellationToken).ConfigureAwait(false);
+    // Upload the EventLog log-watcher script, filtering by the service name (the source
+    // .NET's EventLogLoggerProvider defaults to when running as a Windows Service).
+    await UploadLogWatcherScriptAsync(annotation, sn, remotePath, transport, cancellationToken).ConfigureAwait(false);
 
     logger.LogInformation("Windows Service '{ServiceName}' installed at '{BinPath}'.", sn, binPath);
   }
@@ -192,19 +194,6 @@ internal static class WindowsServiceRunner
       throw new InvalidOperationException($"Failed to start Windows Service '{sn}' (exit {startExit}): {startErr.Trim()}");
 
     logger.LogInformation("Windows Service '{ServiceName}' started.", sn);
-
-    // Give the service a moment to start up and write its first EventLog entries,
-    // then run a diagnostic query to see what source names are present in the
-    // Application log.  This helps diagnose EventLog source mismatches.
-    await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
-    var diagScript = @"Get-WinEvent -FilterHashtable @{ LogName='Application'; StartTime=(Get-Date).AddMinutes(-2) } -MaxEvents 20 -ErrorAction SilentlyContinue | Group-Object ProviderName | Select-Object Count,Name | Format-Table -AutoSize";
-    var (_, diagOut, _) = await transport.ExecuteSshCommandAsync(
-      $@"powershell.exe -NonInteractive -Command ""{diagScript}""",
-      cancellationToken).ConfigureAwait(false);
-    if (!string.IsNullOrWhiteSpace(diagOut))
-      logger.LogDebug("Recent Application EventLog sources (last 2 min): {Sources}", diagOut.Trim());
-    else
-      logger.LogDebug("No Application EventLog entries found in the last 2 minutes.");
 
     if (transport.SidecarChannel is null)
     {
@@ -330,7 +319,7 @@ internal static class WindowsServiceRunner
     CancellationToken cancellationToken)
   {
     using var call = client.StreamLogs(
-      new StreamLogsRequest { Name = annotation.LogWatcherProcessName, ReplayCached = false },
+      new StreamLogsRequest { Name = annotation.LogWatcherProcessName, ReplayCached = true },
       cancellationToken: cancellationToken);
 
     try
