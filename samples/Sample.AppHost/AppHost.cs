@@ -16,6 +16,4 @@ builder.AddRemoteProject<Sample_WorkerApp>("remote-worker", windev)
     "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
   .WithEnvironment("service-mode", "windows");
 
-// builder.AddProject<Sample_WorkerApp>("local-worker");
-
 builder.Build().Run();
