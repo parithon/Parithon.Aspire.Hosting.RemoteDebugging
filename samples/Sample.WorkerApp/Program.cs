@@ -3,7 +3,11 @@ using Serilog;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-// Resolve log file path and output template — injected by the AppHost via WithLoggingSupport()
+// Configure service defaults (OpenTelemetry, service discovery, health checks) FIRST
+// This sets up the logging pipeline with OpenTelemetry export to the apphost
+builder.AddServiceDefaults();
+
+// Resolve log file path and output template — injected by the AppHost
 // or falling back to a sensible default for standalone runs.
 var logFilePath = builder.Configuration["Logging:FilePath"]
     ?? Path.Combine(
@@ -15,7 +19,9 @@ var outputTemplate = builder.Configuration["Logging:OutputTemplate"]
 
 Directory.CreateDirectory(Path.GetDirectoryName(logFilePath)!);
 
-builder.Services.AddSerilog(new LoggerConfiguration()
+// Add Serilog as an ADDITIONAL logging sink (not a replacement)
+// This preserves the OpenTelemetry logging configured by AddServiceDefaults()
+builder.Logging.AddSerilog(new LoggerConfiguration()
     .MinimumLevel.Information()
     .WriteTo.File(
         path: logFilePath,
@@ -38,7 +44,6 @@ if (!string.IsNullOrWhiteSpace(serviceMode))
     }
 }
 
-builder.AddServiceDefaults();
 builder.Services.AddHttpClient();
 builder.Services.AddHostedService<Worker>();
 
