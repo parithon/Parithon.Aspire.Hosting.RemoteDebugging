@@ -17,6 +17,8 @@
     <RepositoryUrl>https://github.com/parithon/Parithon.Aspire.Hosting.RemoteDebugging</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <!-- MinVer: match tags of the form v0.0.0 -->
+    <MinVerTagPrefix>v</MinVerTagPrefix>
   </PropertyGroup>
 
   <ItemGroup>
