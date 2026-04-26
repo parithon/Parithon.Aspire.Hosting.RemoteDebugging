@@ -1,8 +1,8 @@
-# Aspire.Hosting.RemoteDebugging
+# Parithon.Aspire.Hosting.RemoteDebugging
 
-[![CI](https://github.com/parithon/Aspire.Hosting.RemoteDebugging/actions/workflows/ci.yml/badge.svg)](https://github.com/parithon/Aspire.Hosting.RemoteDebugging/actions/workflows/ci.yml)
-[![GitHub release](https://img.shields.io/github/v/release/parithon/Aspire.Hosting.RemoteDebugging)](https://github.com/parithon/Aspire.Hosting.RemoteDebugging/releases)
-[![GitHub Packages](https://img.shields.io/badge/NuGet-GitHub%20Packages-blue?logo=nuget)](https://github.com/parithon/Aspire.Hosting.RemoteDebugging/pkgs/nuget/Aspire.Hosting.RemoteDebugging)
+[![CI](https://github.com/parithon/Parithon.Aspire.Hosting.RemoteDebugging/actions/workflows/ci.yml/badge.svg)](https://github.com/parithon/Parithon.Aspire.Hosting.RemoteDebugging/actions/workflows/ci.yml)
+[![GitHub release](https://img.shields.io/github/v/release/parithon/Parithon.Aspire.Hosting.RemoteDebugging)](https://github.com/parithon/Parithon.Aspire.Hosting.RemoteDebugging/releases)
+[![GitHub Packages](https://img.shields.io/badge/NuGet-GitHub%20Packages-blue?logo=nuget)](https://github.com/parithon/Parithon.Aspire.Hosting.RemoteDebugging/pkgs/nuget/Parithon.Aspire.Hosting.RemoteDebugging)
 
 A .NET Aspire hosting extension that lets you deploy, run, and **remote-debug** .NET projects on a remote Windows or Linux host — all from your local Aspire AppHost. Logs, traces, and metrics flow back to the Aspire dashboard via an SSH-tunnelled OpenTelemetry pipeline.
 
@@ -34,7 +34,7 @@ dotnet nuget add source https://nuget.pkg.github.com/parithon/index.json \
 Then add the package to your AppHost project:
 
 ```bash
-dotnet add package Aspire.Hosting.RemoteDebugging
+dotnet add package Parithon.Aspire.Hosting.RemoteDebugging
 ```
 
 ---
@@ -46,7 +46,7 @@ dotnet add package Aspire.Hosting.RemoteDebugging
 ```csharp
 // AppHost/AppHost.cs
 using System.Runtime.InteropServices;
-using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
+using Parithon.Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 
 var builder = DistributedApplication.CreateBuilder(args);
 

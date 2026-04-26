@@ -32,11 +32,11 @@ jobs:
         run: dotnet build --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test tests/Aspire.Hosting.RemoteDebugging.Tests --no-build --configuration Release
+        run: dotnet test tests/Parithon.Aspire.Hosting.RemoteDebugging.Tests --no-build --configuration Release
 
       - name: Pack
         run: |
-          dotnet pack src/Aspire.Hosting.RemoteDebugging/Aspire.Hosting.RemoteDebugging.csproj \
+          dotnet pack src/Parithon.Aspire.Hosting.RemoteDebugging/Parithon.Aspire.Hosting.RemoteDebugging.csproj \
             --no-build \
             --configuration Release \
             --output ./nupkg

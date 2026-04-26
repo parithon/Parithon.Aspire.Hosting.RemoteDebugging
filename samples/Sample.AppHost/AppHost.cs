@@ -1,5 +1,5 @@
 using System.Runtime.InteropServices;
-using Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
+using Parithon.Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 using Projects;
 
 var builder = DistributedApplication.CreateBuilder(args);

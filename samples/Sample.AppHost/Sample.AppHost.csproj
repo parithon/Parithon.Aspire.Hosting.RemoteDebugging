@@ -10,7 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../Sample.WorkerApp/Sample.WorkerApp.csproj" />
-    <ProjectReference Include="..\..\src\Aspire.Hosting.RemoteDebugging\Aspire.Hosting.RemoteDebugging.csproj" IsAspireProjectResource="false" />
+    <ProjectReference Include="..\..\src\Parithon.Aspire.Hosting.RemoteDebugging\Parithon.Aspire.Hosting.RemoteDebugging.csproj" IsAspireProjectResource="false" />
   </ItemGroup>
 
 </Project>

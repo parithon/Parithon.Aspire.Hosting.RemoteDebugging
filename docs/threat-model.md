@@ -1,4 +1,4 @@
-# Threat Model — Aspire.Hosting.RemoteDebugging
+# Threat Model — Parithon.Aspire.Hosting.RemoteDebugging
 
 **Scope:** Development-time use only. This tool is designed to be used on trusted development networks. It is **not** intended for production deployments or exposure to untrusted networks.
 

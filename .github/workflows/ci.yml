@@ -32,7 +32,7 @@ jobs:
         run: dotnet build --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test tests/Aspire.Hosting.RemoteDebugging.Tests --no-build --configuration Release --logger "trx;LogFileName=results.trx" --results-directory ./test-results
+        run: dotnet test tests/Parithon.Aspire.Hosting.RemoteDebugging.Tests --no-build --configuration Release --logger "trx;LogFileName=results.trx" --results-directory ./test-results
 
       - name: Upload test results
         if: always()

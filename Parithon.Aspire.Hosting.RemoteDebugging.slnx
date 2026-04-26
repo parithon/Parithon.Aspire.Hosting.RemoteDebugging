@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/Sample.AppHost/Sample.AppHost.csproj" />
+    <Project Path="samples/Sample.ServiceDefaults/Sample.ServiceDefaults.csproj" />
+    <Project Path="samples/Sample.WorkerApp/Sample.WorkerApp.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Parithon.Aspire.Hosting.RemoteDebugging.Sidecar/Parithon.Aspire.Hosting.RemoteDebugging.Sidecar.csproj" />
+    <Project Path="src/Parithon.Aspire.Hosting.RemoteDebugging/Parithon.Aspire.Hosting.RemoteDebugging.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Parithon.Aspire.Hosting.RemoteDebugging.Tests/Parithon.Aspire.Hosting.RemoteDebugging.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -15,11 +15,11 @@ Thank you for your interest in contributing! This document covers how to build, 
 ## Getting Started
 
 ```bash
-git clone https://github.com/parithon/Aspire.Hosting.RemoteDebugging.git
-cd Aspire.Hosting.RemoteDebugging
+git clone https://github.com/parithon/Parithon.Aspire.Hosting.RemoteDebugging.git
+cd Parithon.Aspire.Hosting.RemoteDebugging
 dotnet restore
 dotnet build
-dotnet test tests/Aspire.Hosting.RemoteDebugging.Tests
+dotnet test tests/Parithon.Aspire.Hosting.RemoteDebugging.Tests
 ```
 
 ---
@@ -28,13 +28,13 @@ dotnet test tests/Aspire.Hosting.RemoteDebugging.Tests
 
 ```
 src/
-  Aspire.Hosting.RemoteDebugging/          # Main library
-  Aspire.Hosting.RemoteDebugging.Sidecar/  # Remote sidecar agent (gRPC)
+  Parithon.Aspire.Hosting.RemoteDebugging/          # Main library
+  Parithon.Aspire.Hosting.RemoteDebugging.Sidecar/  # Remote sidecar agent (gRPC)
 samples/
   Sample.AppHost/                          # Example Aspire AppHost
   Sample.WorkerApp/                        # Example .NET Worker deployed remotely
 tests/
-  Aspire.Hosting.RemoteDebugging.Tests/    # Unit and integration tests
+  Parithon.Aspire.Hosting.RemoteDebugging.Tests/    # Unit and integration tests
 ```
 
 ---
@@ -85,12 +85,12 @@ This project follows a **TDD-first** model:
 Run the full test suite:
 
 ```bash
-dotnet test tests/Aspire.Hosting.RemoteDebugging.Tests
+dotnet test tests/Parithon.Aspire.Hosting.RemoteDebugging.Tests
 ```
 
 - Framework: **MSTest** + **FluentAssertions** + **Moq**
 - Minimum coverage target: **85%** for domain and application layers
-- Tests live alongside the code they cover under `tests/Aspire.Hosting.RemoteDebugging.Tests/`
+- Tests live alongside the code they cover under `tests/Parithon.Aspire.Hosting.RemoteDebugging.Tests/`
 
 ---
 
@@ -133,7 +133,7 @@ The workflow builds, tests, packs, publishes to GitHub Packages, and creates a G
 
 ## Reporting Issues
 
-Please open a [GitHub Issue](https://github.com/parithon/Aspire.Hosting.RemoteDebugging/issues) and include:
+Please open a [GitHub Issue](https://github.com/parithon/Parithon.Aspire.Hosting.RemoteDebugging/issues) and include:
 
 - .NET SDK version (`dotnet --version`)
 - Aspire version
