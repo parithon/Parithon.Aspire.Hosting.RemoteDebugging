@@ -6,10 +6,13 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 var windev_passwd = builder.AddParameter("win-dev-password", secret: true);
 
+var webapi = builder.AddProject<Sample_WebApi>("webapi");
+
 var windev = builder.AddRemoteHost("win-dev", OSPlatform.Windows, new("loadmin", windev_passwd))
   .WithEndpoint("10.47.255.250", TransportType.SSH, 22);
 
 builder.AddRemoteProject<Sample_WorkerApp>("remote-worker", windev)
+  .WithReference(webapi)
   .AsWindowsService("remoteworker", "Remote Worker")
   .WithLoggingSupport(
     @"C:\Windows\Logs\remote-worker\worker.log",

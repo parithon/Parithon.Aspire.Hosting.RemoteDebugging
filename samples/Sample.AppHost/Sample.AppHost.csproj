@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../Sample.WebApi/Sample.WebApi.csproj" />
     <ProjectReference Include="../Sample.WorkerApp/Sample.WorkerApp.csproj" />
     <ProjectReference Include="..\..\src\Parithon.Aspire.Hosting.RemoteDebugging\Parithon.Aspire.Hosting.RemoteDebugging.csproj" IsAspireProjectResource="false" />
   </ItemGroup>

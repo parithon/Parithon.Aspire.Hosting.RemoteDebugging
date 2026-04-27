@@ -16,11 +16,15 @@ public class Worker(IHttpClientFactory clientFactory, ILogger<Worker> logger) : 
     }
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        using var client = clientFactory.CreateClient();
+        client.BaseAddress = new Uri("https+http://webapi/");
         while (!stoppingToken.IsCancellationRequested)
         {
             if (logger.IsEnabled(LogLevel.Information))
             {
                 logger.LogInformation("Worker running at: {time}", DateTimeOffset.Now);
+                var forecast = await client.GetStringAsync("weatherforecast", stoppingToken);
+                logger.LogInformation("Weather foreast: {WeatherForecast}", forecast);
             }
             await Task.Delay(1000, stoppingToken);
         }
