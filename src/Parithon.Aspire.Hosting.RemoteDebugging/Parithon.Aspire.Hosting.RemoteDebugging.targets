@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <!-- 
+    This MSBuild targets file is automatically imported by NuGet into any project 
+    that consumes this package. It copies the sidecar tools into the consuming 
+    project's output directory so the remote debugging functionality has access 
+    to the required executables at runtime.
+  -->
+
+  <!-- Copy sidecar tools from the package's tools/sidecar/ directory to the output directory. -->
+  <Target Name="CopySidecarToolsToOutput" BeforeTargets="Build">
+    <ItemGroup>
+      <_SidecarToolsFile Include="$(MSBuildThisFileDirectory)..\tools\sidecar\**\*" />
+    </ItemGroup>
+    
+    <Copy 
+      SourceFiles="@(_SidecarToolsFile)" 
+      DestinationFiles="@(_SidecarToolsFile->'$(OutputPath)sidecar\%(RecursiveDir)%(Filename)%(Extension)')" 
+      SkipUnchangedFiles="true" 
+      UseHardlinksIfPossible="true" />
+  </Target>
+
+</Project>
