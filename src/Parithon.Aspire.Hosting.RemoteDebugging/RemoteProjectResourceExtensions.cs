@@ -76,6 +76,7 @@ public static class RemoteProjectResourceExtensions
 
   /// <summary>
   /// Adds an environment variable that will be injected into the remote process when it starts.
+  /// Also registers an Aspire environment callback so the AppHost dashboard captures it.
   /// </summary>
   public static IResourceBuilder<RemoteProjectResource<TProject>> WithEnvironment<TProject>(
     this IResourceBuilder<RemoteProjectResource<TProject>> builder,
@@ -100,6 +101,15 @@ public static class RemoteProjectResourceExtensions
     }
 
     builder.Resource.EnvironmentVariables[key] = value;
+
+    // Keep an Aspire environment callback in sync so the dashboard surfaces
+    // this variable in the resource environment view.
+    builder.Resource.Annotations.Add(new EnvironmentCallbackAnnotation(ctx =>
+    {
+      ctx.EnvironmentVariables[key] = value;
+      return Task.CompletedTask;
+    }));
+
     return builder;
   }
 

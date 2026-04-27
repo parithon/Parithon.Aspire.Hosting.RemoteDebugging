@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Xml.Linq;
 using Aspire.Hosting.ApplicationModel;
@@ -203,6 +204,8 @@ internal static class RemoteProjectRunner
         if (logAnnotation.OutputTemplate is not null)
           env["Logging__OutputTemplate"] = logAnnotation.OutputTemplate;
       }
+
+      await PublishEnvironmentSnapshotAsync(resource, notifications, env).ConfigureAwait(false);
 
       try
       {
@@ -556,6 +559,8 @@ internal static class RemoteProjectRunner
     var env = await BuildEnvironmentAsync(resource, annotation.Transport, logger, cancellationToken)
       .ConfigureAwait(false);
 
+    await PublishEnvironmentSnapshotAsync(resource, notifications, env).ConfigureAwait(false);
+
     var request = new StartProcessRequest
     {
       Name             = resource.Name,
@@ -687,12 +692,23 @@ internal static class RemoteProjectRunner
       foreach (var callbackAnnotation in envCallbacks)
         await callbackAnnotation.Callback(callbackContext).ConfigureAwait(false);
 
+      logger.LogDebug(
+        "Processing {CallbackEnvCount} environment variables from Aspire callbacks (WithReference, WithEnvironment).",
+        callbackEnv.Count);
+
       foreach (var (key, value) in callbackEnv)
       {
-        var resolved = await ResolveEnvValueAsync(key, value, transport, logger, cancellationToken)
+        logger.LogDebug(
+          "Resolving environment variable '{Key}': {ValueType}.",
+          key, value?.GetType().Name ?? "null");
+
+        var resolved = await ResolveEnvValueAsync(key, value!, transport, logger, cancellationToken)
           .ConfigureAwait(false);
         if (resolved is not null)
+        {
           env[key] = resolved;
+          logger.LogDebug("Environment variable '{Key}' resolved to: {Value}", key, resolved);
+        }
       }
     }
 
@@ -701,6 +717,22 @@ internal static class RemoteProjectRunner
       env[key] = value;
 
     return env;
+  }
+
+  private static Task PublishEnvironmentSnapshotAsync<TProject>(
+    RemoteProjectResource<TProject> resource,
+    ResourceNotificationService notifications,
+    MapField<string, string> environment) where TProject : IProjectMetadata
+  {
+    var snapshots = environment
+      .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+      .Select(kv => new EnvironmentVariableSnapshot(kv.Key, kv.Value, IsFromSpec: true))
+      .ToImmutableArray();
+
+    return notifications.PublishUpdateAsync(resource, s => s with
+    {
+      EnvironmentVariables = snapshots
+    });
   }
 
   /// <summary>
@@ -737,11 +769,22 @@ internal static class RemoteProjectRunner
             var localHost = endpointRef.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
               ? "127.0.0.1"
               : endpointRef.Host;
+            
+            logger.LogInformation(
+              "Setting up reverse tunnel for environment variable '{Key}': {Scheme}://{Host}:{Port} (endpoint '{Endpoint}' on resource '{Resource}').",
+              key, endpointRef.Scheme, localHost, endpointRef.Port, endpointRef.EndpointName, endpointRef.Resource.Name);
+            
             var tunnelPort = await transport.StartEndpointTunnelAsync(
               localHost, (uint)endpointRef.Port, logger, cancellationToken).ConfigureAwait(false);
 
             if (tunnelPort > 0)
-              return $"{endpointRef.Scheme}://127.0.0.1:{tunnelPort}";
+            {
+              var tunnelUrl = $"{endpointRef.Scheme}://127.0.0.1:{tunnelPort}";
+              logger.LogInformation(
+                "Reverse tunnel established for '{Key}': remote process will access at {TunnelUrl}.",
+                key, tunnelUrl);
+              return tunnelUrl;
+            }
 
             logger.LogWarning(
               "Failed to set up reverse tunnel for '{Resource}' endpoint '{Endpoint}'; " +

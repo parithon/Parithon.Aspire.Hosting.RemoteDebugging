@@ -73,6 +73,22 @@ public class BuildEnvironmentTests
     env.Should().ContainKey("MY_VAR").WhoseValue.Should().Be("hello-world");
   }
 
+  [TestMethod]
+  public async Task BuildEnvironment_WithEnvironmentRegistersCallback_IsInjectedWithoutInternalDictionary()
+  {
+    var (_, projectBuilder) = CreateProjectBuilder();
+    projectBuilder.WithEnvironment("MY_VAR", "from-callback");
+
+    // Simulate a run that only relies on Aspire callback annotations
+    // (the path used by dashboard environment capture).
+    projectBuilder.Resource.EnvironmentVariables.Clear();
+
+    var env = await RemoteProjectRunner.BuildEnvironmentAsync(
+      projectBuilder.Resource, transport: null, NullLogger.Instance, CancellationToken.None);
+
+    env.Should().ContainKey("MY_VAR").WhoseValue.Should().Be("from-callback");
+  }
+
   // ── User env vars override callback-injected values ───────────────────────
 
   [TestMethod]

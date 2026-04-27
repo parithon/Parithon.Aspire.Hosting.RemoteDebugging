@@ -36,6 +36,7 @@ internal sealed class SshTransport : IRemoteHostTransport
   private ForwardedPortLocal? _sidecarPortForward;
   private ForwardedPortRemote? _otelPortForward;
   private readonly List<ForwardedPortRemote> _endpointPortForwards = [];
+  private readonly Dictionary<(string host, uint port), uint> _endpointTunnelCache = [];
   private GrpcChannel? _sidecarChannel;
 
   public event EventHandler? ConnectionDropped;
@@ -756,8 +757,24 @@ internal sealed class SshTransport : IRemoteHostTransport
       ? "127.0.0.1"
       : localHost;
 
-    // Pass boundPort=0 to let sshd allocate a free port on the remote host.
-    var forward = new ForwardedPortRemote("127.0.0.1", 0u, normalizedHost, localPort);
+    // Check if we already have a tunnel for this endpoint (host:port pair).
+    // This allows multiple environment variables to reuse the same tunnel.
+    var cacheKey = (normalizedHost, localPort);
+    lock (_endpointTunnelCache)
+    {
+      if (_endpointTunnelCache.TryGetValue(cacheKey, out var cachedRemotePort))
+      {
+        logger.LogInformation(
+          "Reusing existing tunnel for endpoint {LocalHost}:{LocalPort}: remote:127.0.0.1:{RemotePort}",
+          normalizedHost, localPort, cachedRemotePort);
+        return Task.FromResult(cachedRemotePort);
+      }
+    }
+
+    // Request the same port on the remote host for transparent tunneling.
+    // Since we cache by (host, port), this tunnel will only be created once and reused
+    // by all environment variables pointing to the same endpoint.
+    var forward = new ForwardedPortRemote("127.0.0.1", localPort, normalizedHost, localPort);
     _client.AddForwardedPort(forward);
 
     try
@@ -787,8 +804,9 @@ internal sealed class SshTransport : IRemoteHostTransport
     if (remotePort == 0)
     {
       logger.LogWarning(
-        "Endpoint tunnel: sshd did not allocate a dynamic port for {LocalHost}:{LocalPort}.",
-        normalizedHost, localPort);
+        "Endpoint tunnel: sshd did not bind to the requested port {LocalPort} on the remote host {LocalHost}. " +
+        "The port may be in use or restricted.",
+        localPort, normalizedHost);
       forward.Stop();
       _client.RemoveForwardedPort(forward);
       forward.Dispose();
@@ -797,6 +815,9 @@ internal sealed class SshTransport : IRemoteHostTransport
 
     lock (_endpointPortForwards)
       _endpointPortForwards.Add(forward);
+
+    lock (_endpointTunnelCache)
+      _endpointTunnelCache[cacheKey] = remotePort;
 
     logger.LogInformation(
       "Endpoint tunnel established: remote:127.0.0.1:{RemotePort} → {LocalHost}:{LocalPort}",
