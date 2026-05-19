@@ -11,7 +11,7 @@ var webapi = builder.AddProject<Sample_WebApi>("webapi");
 var windev = builder.AddRemoteHost("win-dev", OSPlatform.Windows, new("loadmin", windev_passwd))
   .WithEndpoint("10.47.255.250", TransportType.SSH, 22);
 
-builder.AddRemoteProject<Sample_WorkerApp>("remote-worker", windev)
+windev.AddRemoteProject<Sample_WorkerApp>("remote-worker")
   .WithReference(webapi)
   .AsWindowsService("remoteworker", "Remote Worker")
   .WithLoggingSupport(

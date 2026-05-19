@@ -41,7 +41,7 @@ public class AsWindowsServiceExtensionTests
     var passwordParam = appBuilder.AddParameter("password", secret: true);
     var credential = new RemoteHostCredential("user", passwordParam);
     var hostBuilder = appBuilder.AddRemoteHost(hostName, platform, credential);
-    return appBuilder.AddRemoteProject<FakeProject>(projectName, hostBuilder);
+    return hostBuilder.AddRemoteProject<FakeProject>(projectName);
   }
 
   [TestMethod]
@@ -318,7 +318,7 @@ public class WithLoggingSupportExtensionTests
     var passwordParam = appBuilder.AddParameter("password", secret: true);
     var credential    = new RemoteHostCredential("user", passwordParam);
     var hostBuilder   = appBuilder.AddRemoteHost("win-dev", OSPlatform.Windows, credential);
-    var builder       = appBuilder.AddRemoteProject<FakeProject>("remote-worker", hostBuilder);
+    var builder       = hostBuilder.AddRemoteProject<FakeProject>("remote-worker");
     builder.AsWindowsService("remoteworker");
     return builder;
   }
@@ -330,7 +330,7 @@ public class WithLoggingSupportExtensionTests
     var passwordParam = appBuilder.AddParameter("password", secret: true);
     var credential    = new RemoteHostCredential("user", passwordParam);
     var hostBuilder   = appBuilder.AddRemoteHost("win-dev", OSPlatform.Windows, credential);
-    var builder       = appBuilder.AddRemoteProject<FakeProject>("remote-worker", hostBuilder);
+    var builder       = hostBuilder.AddRemoteProject<FakeProject>("remote-worker");
 
     var act = () => builder.WithLoggingSupport(@"C:\Logs\app\app.log");
 

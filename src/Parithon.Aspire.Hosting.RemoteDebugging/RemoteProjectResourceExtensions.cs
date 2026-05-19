@@ -12,10 +12,18 @@ namespace Aspire.Hosting;
 
 public static class RemoteProjectResourceExtensions
 {
-  public static IResourceBuilder<RemoteProjectResource<TProject>> AddRemoteProject<TProject>(this IDistributedApplicationBuilder builder, [ResourceName] string name, IResourceBuilder<RemoteHostResource> host) where TProject : IProjectMetadata
+  /// <summary>
+  /// Adds a remote project resource to the distributed application, associated with the given remote host.
+  /// </summary>
+  /// <typeparam name="TProject">The project metadata type identifying the project to run remotely.</typeparam>
+  /// <param name="host">The remote host resource builder that this project will run on.</param>
+  /// <param name="name">The name of the remote project resource.</param>
+  public static IResourceBuilder<RemoteProjectResource<TProject>> AddRemoteProject<TProject>(this IResourceBuilder<RemoteHostResource> host, [ResourceName] string name) where TProject : IProjectMetadata
   {
-    ArgumentNullException.ThrowIfNull(builder);
+    ArgumentNullException.ThrowIfNull(host);
     ArgumentNullException.ThrowIfNull(name);
+
+    var builder = host.ApplicationBuilder;
 
     builder.Services.TryAddEventingSubscriber<RemoteProjectEventingSubscriber<TProject>>();
 

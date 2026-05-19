@@ -26,7 +26,7 @@ public class WindowsServiceRunnerTests
     var passwordParam = appBuilder.AddParameter("password", secret: true);
     var credential = new RemoteHostCredential("user", passwordParam);
     var hostBuilder = appBuilder.AddRemoteHost("win-dev", OSPlatform.Windows, credential);
-    var builder = appBuilder.AddRemoteProject<FakeProject>("remote-worker", hostBuilder);
+    var builder = hostBuilder.AddRemoteProject<FakeProject>("remote-worker");
     builder.AsWindowsService("remote-worker");
     return builder;
   }
@@ -40,7 +40,7 @@ public class WindowsServiceRunnerTests
     var passwordParam = appBuilder.AddParameter("password", secret: true);
     var credential = new RemoteHostCredential("user", passwordParam);
     var hostBuilder = appBuilder.AddRemoteHost("win-dev", OSPlatform.Windows, credential);
-    var builder = appBuilder.AddRemoteProject<FakeProject>("my-worker-app", hostBuilder);
+    var builder = hostBuilder.AddRemoteProject<FakeProject>("my-worker-app");
 
     builder.AsWindowsService();
 
@@ -55,7 +55,7 @@ public class WindowsServiceRunnerTests
     var passwordParam = appBuilder.AddParameter("password", secret: true);
     var credential = new RemoteHostCredential("user", passwordParam);
     var hostBuilder = appBuilder.AddRemoteHost("win-dev", OSPlatform.Windows, credential);
-    var builder = appBuilder.AddRemoteProject<FakeProject>("worker", hostBuilder);
+    var builder = hostBuilder.AddRemoteProject<FakeProject>("worker");
 
     // Spaces in service names enable sc.exe command injection; validate and reject.
     Action act = () => builder.AsWindowsService("my worker app");
@@ -144,7 +144,7 @@ public class WindowsServiceRunnerTests
     var passwordParam = appBuilder.AddParameter("password", secret: true);
     var credential = new RemoteHostCredential("user", passwordParam);
     var hostBuilder = appBuilder.AddRemoteHost("win-dev", OSPlatform.Windows, credential);
-    var builder = appBuilder.AddRemoteProject<FakeProject>("worker", hostBuilder);
+    var builder = hostBuilder.AddRemoteProject<FakeProject>("worker");
 
     builder.AsWindowsService("svc", displayName: "My Application");
 
@@ -224,7 +224,7 @@ public class WindowsServiceRunnerTests
     var passwordParam = appBuilder.AddParameter("password", secret: true);
     var credential = new RemoteHostCredential("user", passwordParam);
     var hostBuilder = appBuilder.AddRemoteHost("linux-dev", OSPlatform.Linux, credential);
-    var builder = appBuilder.AddRemoteProject<FakeProject>("worker", hostBuilder);
+    var builder = hostBuilder.AddRemoteProject<FakeProject>("worker");
 
     Action act = () => builder.AsWindowsService();
 

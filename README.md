@@ -65,7 +65,7 @@ dotnet user-secrets set "Parameters:remote-password" "your-password"
 ### 2. Add a remote project
 
 ```csharp
-builder.AddRemoteProject<MyApp>("my-app", remoteHost);
+remoteHost.AddRemoteProject<MyApp>("my-app");
 
 builder.Build().Run();
 ```
@@ -81,7 +81,7 @@ Press **F5** in VS Code (with the C# Dev Kit extension) — the AppHost deploys 
 Deploy and run your project as a Windows Service:
 
 ```csharp
-builder.AddRemoteProject<MyWorker>("my-worker", remoteHost)
+remoteHost.AddRemoteProject<MyWorker>("my-worker")
     .AsWindowsService("myworker", "My Worker Service")
     .WithLoggingSupport(
         @"C:\Windows\Logs\my-worker\app.log",

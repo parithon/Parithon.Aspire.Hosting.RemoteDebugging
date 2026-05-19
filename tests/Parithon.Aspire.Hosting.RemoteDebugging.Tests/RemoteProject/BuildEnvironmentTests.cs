@@ -29,7 +29,7 @@ public class BuildEnvironmentTests
     var passwordParam  = appBuilder.AddParameter("password", secret: true);
     var credential     = new RemoteHostCredential("user", passwordParam);
     var hostBuilder    = appBuilder.AddRemoteHost(hostName, OSPlatform.Linux, credential);
-    var projectBuilder = appBuilder.AddRemoteProject<FakeProject>(projectName, hostBuilder);
+    var projectBuilder = hostBuilder.AddRemoteProject<FakeProject>(projectName);
     return (appBuilder, projectBuilder);
   }
 
