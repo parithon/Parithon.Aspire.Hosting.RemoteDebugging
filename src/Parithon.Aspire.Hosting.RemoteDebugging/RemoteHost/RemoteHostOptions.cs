@@ -1,15 +1,12 @@
 using System.Runtime.InteropServices;
 using Aspire.Hosting.ApplicationModel;
 
-using Parithon.Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
-
 namespace Parithon.Aspire.Hosting.RemoteDebugging.RemoteHost;
 
 public sealed class RemoteHostOptions
 {
   public OSPlatform Platform { get; set; }
   public RemoteHostCredential? Credential { get; set; }
-  public TransportType? TransportType { get; set; }
   internal string? Dns { get; set; }
   internal IResourceBuilder<ParameterResource>? DnsParameter { get; set; }
   internal int? Port { get; set; }

@@ -46,7 +46,6 @@ dotnet add package Parithon.Aspire.Hosting.RemoteDebugging
 ```csharp
 // AppHost/AppHost.cs
 using System.Runtime.InteropServices;
-using Parithon.Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -54,7 +53,7 @@ var password = builder.AddParameter("remote-password", secret: true);
 
 var remoteHost = builder.AddRemoteHost("my-server", OSPlatform.Windows,
         new RemoteHostCredential("myuser", password))
-    .WithEndpoint("192.168.1.100", TransportType.SSH, 22);
+    .WithEndpoint("192.168.1.100", 22);
 ```
 
 Store the secret locally:
@@ -108,7 +107,7 @@ remoteHost.AddRemoteProject<MyWorker>("my-worker")
 
 | Method | Description |
 |--------|-------------|
-| `.WithEndpoint(dns, type, port)` | Set hostname/IP, transport, and port |
+| `.WithEndpoint(dns, port)` | Set hostname/IP and SSH port |
 | `.WithDeploymentPath(path)` | Override the remote deployment root |
 | `.WithRemoteToolsPath(path)` | Override the path where vsdbg is installed |
 | `.AsPlatform(platform)` | Override the OS platform |
@@ -204,7 +203,7 @@ For **CI/CD** environments where `known_hosts` is not available, use an explicit
 
 ```csharp
 builder.AddRemoteHost("my-server", OSPlatform.Windows, credential)
-    .WithEndpoint("192.168.1.100", TransportType.SSH, 22)
+    .WithEndpoint("192.168.1.100", 22)
     .WithHostKeyFingerprint("abc123...your-sha256-fingerprint");
 ```
 
