@@ -30,19 +30,7 @@ builder.Logging.AddSerilog(new LoggerConfiguration()
         outputTemplate: outputTemplate)
     .CreateLogger());
 
-var serviceMode = builder.Configuration["service-mode"];
-if (!string.IsNullOrWhiteSpace(serviceMode))
-{
-    switch (serviceMode.Trim().ToLowerInvariant())
-    {
-        case "windows":
-            builder.Services.AddWindowsService();
-            break;
-        default:
-            throw new InvalidOperationException(
-                "Invalid value for 'service-mode'. Supported value is 'windows'.");
-    }
-}
+builder.Services.AddWindowsService();
 
 builder.Services.AddHttpClient();
 builder.Services.AddHostedService<Worker>();

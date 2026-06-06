@@ -43,15 +43,11 @@ internal static class RemoteHostConnector
         resource.Annotations.Remove(existing);
       }
 
-      IRemoteHostTransport transport = resource.TransportType switch
-      {
-        TransportType.SSH => new SshTransport(),
-        _ => throw new NotSupportedException($"Transport type '{resource.TransportType}' is not supported.")
-      };
+      IRemoteHostTransport transport = new SshTransport();
 
       if (logger.IsEnabled(LogLevel.Information))
       {
-        logger.LogInformation("Establishing a {TransportType} connection to {Resource}", resource.TransportType, resource.Name);
+        logger.LogInformation("Establishing an SSH connection to {Resource}", resource.Name);
       }
 
       await transport.ConnectAsync(resource, logger, cancellationToken).ConfigureAwait(false);

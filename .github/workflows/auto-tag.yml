@@ -1,0 +1,74 @@
+name: Auto Tag
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - rc/**
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Compute And Push Tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate base semantic version
+        id: semver
+        uses: PaulHatch/semantic-version@v5
+        with:
+          tag_prefix: "v"
+          major_pattern: "(BREAKING CHANGE|!:)"
+          minor_pattern: "^feat(\\(.+\\))?:"
+          version_format: "${major}.${minor}.${patch}"
+          bump_each_commit: false
+
+      - name: Select final tag
+        id: final
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          branch="${GITHUB_REF_NAME}"
+          base="v${{ steps.semver.outputs.version }}"
+
+          if [[ "$branch" == "main" ]]; then
+            tag="$base"
+          elif [[ "$branch" == "develop" ]]; then
+            latest=$(git tag -l "${base}-beta.*" | sed -E "s/^${base}-beta\\.//" | sort -n | tail -1)
+            next=$(( ${latest:-0} + 1 ))
+            tag="${base}-beta.${next}"
+          elif [[ "$branch" == rc/* ]]; then
+            latest=$(git tag -l "${base}-rc.*" | sed -E "s/^${base}-rc\\.//" | sort -n | tail -1)
+            next=$(( ${latest:-0} + 1 ))
+            tag="${base}-rc.${next}"
+          else
+            echo "Unsupported branch '$branch'; skipping."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "Tag ${tag} already exists; skipping."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        if: steps.final.outputs.tag != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.final.outputs.tag }}"
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag "$tag"
+          git push origin "$tag"

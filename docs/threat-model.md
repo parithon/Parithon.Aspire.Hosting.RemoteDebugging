@@ -99,7 +99,7 @@ ssh-keyscan -H <host> >> ~/.ssh/known_hosts
 For CI/CD pipelines where `known_hosts` is not available, use the explicit pin:
 ```csharp
 builder.AddRemoteHost("my-server", OSPlatform.Windows, credential)
-    .WithEndpoint("192.168.1.100", TransportType.SSH, 22)
+    .WithEndpoint("192.168.1.100", 22)
     .WithHostKeyFingerprint("abc123...your-fingerprint-here");
 ```
 

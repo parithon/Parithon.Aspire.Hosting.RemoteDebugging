@@ -4,7 +4,6 @@ using Aspire.Hosting.Lifecycle;
 using Parithon.Aspire.Hosting.RemoteDebugging.RemoteHost;
 using Parithon.Aspire.Hosting.RemoteDebugging.RemoteHost.Annotations;
 using Parithon.Aspire.Hosting.RemoteDebugging.RemoteHost.HealthChecks;
-using Parithon.Aspire.Hosting.RemoteDebugging.RemoteHost.Transport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
@@ -52,7 +51,6 @@ public static class RemoteHostResourceExtensions
     {
       Platform = options.Platform,
       Credential = options.Credential,
-      TransportType = options.TransportType ?? TransportType.SSH,
       Dns = options.Dns ?? name,
       DnsParameter = options.DnsParameter,
       Port = options.Port,
@@ -169,17 +167,9 @@ public static class RemoteHostResourceExtensions
     ArgumentNullException.ThrowIfNull(dns);
 
     builder.Resource.Dns = dns;
-    builder.Resource.TransportType = TransportType.SSH;
     builder.Resource.Port = 22;
 
     return builder;
-  }
-
-  public static IResourceBuilder<RemoteHostResource> WithEndpoint(this IResourceBuilder<RemoteHostResource> builder, TransportType type, string dns)
-  {
-    var endpoint = WithEndpoint(builder, dns);
-    endpoint.Resource.TransportType = type;
-    return endpoint;
   }
 
   public static IResourceBuilder<RemoteHostResource> WithEndpoint(this IResourceBuilder<RemoteHostResource> builder, IResourceBuilder<ParameterResource> dns)
@@ -188,19 +178,11 @@ public static class RemoteHostResourceExtensions
     ArgumentNullException.ThrowIfNull(dns);
 
     builder.Resource.DnsParameter = dns;
-    builder.Resource.TransportType = TransportType.SSH;
     builder.Resource.Port = 22;
 
     builder.WithReferenceRelationship(dns);
 
     return builder;
-  }
-
-  public static IResourceBuilder<RemoteHostResource> WithEndpoint(this IResourceBuilder<RemoteHostResource> builder, TransportType type, IResourceBuilder<ParameterResource> dns)
-  {
-    var endpoint = WithEndpoint(builder, dns);
-    endpoint.Resource.TransportType = type;
-    return endpoint;
   }
 
   public static IResourceBuilder<RemoteHostResource> WithEndpoint(this IResourceBuilder<RemoteHostResource> builder, string dns, int port)
@@ -214,13 +196,6 @@ public static class RemoteHostResourceExtensions
     builder.Resource.Port = port;
 
     return builder;
-  }
-
-  public static IResourceBuilder<RemoteHostResource> WithEndpoint(this IResourceBuilder<RemoteHostResource> builder, string dns, TransportType type, int port)
-  {
-    var endpoint = WithEndpoint(builder, dns, port);
-    endpoint.Resource.TransportType = type;
-    return endpoint;
   }
 
   public static IResourceBuilder<RemoteHostResource> WithEndpoint(this IResourceBuilder<RemoteHostResource> builder, IResourceBuilder<ParameterResource> dns, int port)
@@ -238,13 +213,6 @@ public static class RemoteHostResourceExtensions
     return builder;
   }
 
-  public static IResourceBuilder<RemoteHostResource> WithEndpoint(this IResourceBuilder<RemoteHostResource> builder, IResourceBuilder<ParameterResource> dns, TransportType type, int port)
-  {
-    var endpoint = WithEndpoint(builder, dns, port);
-    endpoint.Resource.TransportType = type;
-    return endpoint;
-  }
-
   public static IResourceBuilder<RemoteHostResource> WithEndpoint(this IResourceBuilder<RemoteHostResource> builder, string dns, IResourceBuilder<ParameterResource> port)
   {
     ArgumentNullException.ThrowIfNull(builder);
@@ -256,13 +224,6 @@ public static class RemoteHostResourceExtensions
     builder.WithReferenceRelationship(port);
 
     return builder;
-  }
-
-  public static IResourceBuilder<RemoteHostResource> WithEndpoint(this IResourceBuilder<RemoteHostResource> builder, string dns, TransportType type, IResourceBuilder<ParameterResource> port)
-  {
-    var endpoint = WithEndpoint(builder, dns, port);
-    endpoint.Resource.TransportType = type;
-    return endpoint;
   }
 
   public static IResourceBuilder<RemoteHostResource> WithEndpoint(this IResourceBuilder<RemoteHostResource> builder, IResourceBuilder<ParameterResource> dns, IResourceBuilder<ParameterResource> port)
@@ -277,13 +238,6 @@ public static class RemoteHostResourceExtensions
     builder.WithReferenceRelationship(port);
 
     return builder;
-  }
-
-  public static IResourceBuilder<RemoteHostResource> WithEndpoint(this IResourceBuilder<RemoteHostResource> builder, IResourceBuilder<ParameterResource> dns, TransportType type, IResourceBuilder<ParameterResource> port)
-  {
-    var endpoint = WithEndpoint(builder, dns, port);
-    endpoint.Resource.TransportType = type;
-    return endpoint;
   }
 
   /// <summary>

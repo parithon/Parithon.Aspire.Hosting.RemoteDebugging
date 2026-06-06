@@ -120,14 +120,13 @@ Common scopes: `transport`, `sidecar`, `windows-service`, `remote-project`, `ote
 
 ## Releasing
 
-Releases are automated via the `release.yml` workflow. Maintainers tag a version on `main` after merging from `develop`:
+Tagging and publishing are automated:
 
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
+- `main` pushes create stable tags (`v1.2.3`)
+- `develop` pushes create beta prerelease tags (`v1.2.3-beta.1`)
+- `rc/*` pushes create rc prerelease tags (`v1.2.3-rc.1`)
 
-The workflow builds, tests, packs, publishes to GitHub Packages, and creates a GitHub Release automatically. Versioning is driven by [MinVer](https://github.com/adamralph/minver) from git tags.
+`auto-tag.yml` computes and pushes the next tag using Conventional Commit bump rules (major/minor/patch). Each tag then triggers `release.yml`, which builds, tests, packs, publishes to feeds, and creates a GitHub Release. Versioning is driven by [MinVer](https://github.com/adamralph/minver) from git tags.
 
 ---
 

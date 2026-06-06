@@ -155,7 +155,7 @@ internal static class RemoteProjectRunner
 
     try
     {
-      await DeployAsync(resource, logger, cancellationToken).ConfigureAwait(false);
+      await PrepareAndDeployAsync(resource, logger, cancellationToken).ConfigureAwait(false);
     }
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
@@ -182,18 +182,7 @@ internal static class RemoteProjectRunner
         || transportAnnotation?.Transport is not IRemoteHostTransport transport)
         throw new InvalidOperationException($"Cannot install service '{resource.Name}': no active transport.");
 
-      // Phase 3a: Clean up any stale service from a previous session.
-      try
-      {
-        await WindowsServiceRunner.EnsureCleanAsync(resource, svcAnnotation, transport, logger, cancellationToken)
-          .ConfigureAwait(false);
-      }
-      catch (Exception ex) when (ex is not OperationCanceledException)
-      {
-        logger.LogWarning(ex, "Could not clean up stale Windows Service '{Name}' — continuing anyway.", resource.Name);
-      }
-
-      // Phase 3b: Install the service.
+      // Phase 3a: Install the service.
       var env = await BuildEnvironmentAsync(resource, transport, logger, cancellationToken)
         .ConfigureAwait(false);
 
@@ -223,7 +212,7 @@ internal static class RemoteProjectRunner
         return;
       }
 
-      // Phase 3c: Start the service and stream EventLog output.
+      // Phase 3b: Start the service and stream EventLog output.
       await notifications.PublishUpdateAsync(resource, s => s with
       {
         State = KnownRemoteProjectStates.RunningSnapshot,
@@ -535,6 +524,27 @@ internal static class RemoteProjectRunner
       .ConfigureAwait(false);
 
     resource.RemoteDeploymentPath = remotePath;
+  }
+
+  internal static async Task PrepareAndDeployAsync<TProject>(
+    RemoteProjectResource<TProject> resource,
+    ILogger logger,
+    CancellationToken cancellationToken) where TProject : IProjectMetadata
+  {
+    if (resource.TryGetLastAnnotation<WindowsServiceAnnotation>(out var serviceAnnotation) && serviceAnnotation is not null)
+    {
+      if (!resource.Parent.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var transportAnnotation)
+        || transportAnnotation?.Transport is not IRemoteHostTransport transport)
+      {
+        throw new InvalidOperationException(
+          $"Cannot prepare service '{resource.Name}' for deployment: no active transport.");
+      }
+
+      await WindowsServiceRunner.EnsureCleanAsync(resource, serviceAnnotation, transport, logger, cancellationToken)
+        .ConfigureAwait(false);
+    }
+
+    await DeployAsync(resource, logger, cancellationToken).ConfigureAwait(false);
   }
 
   private static async Task StartAsync<TProject>(
