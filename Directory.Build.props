@@ -1,0 +1,27 @@
+<Project>
+
+  <!--
+    macOS Apple Silicon (ARM64) workaround for Grpc.Tools
+    ======================================================
+    Grpc.Tools ships only x86_64 binaries for macOS (macosx_x64). On Apple Silicon,
+    running these binaries fails with "Bad CPU type in executable" unless Rosetta 2 is
+    installed.
+
+    This file detects macOS ARM64 at build time and redirects protoc and grpc_csharp_plugin
+    to native ARM64 binaries installed via Homebrew, so Rosetta 2 is not required.
+
+    Setup (one-time, macOS ARM64 only):
+        brew install protobuf grpc
+
+    If neither Homebrew tools nor Rosetta 2 are present, the build will still fail with
+    the same error. Install one of the two options above to resolve it.
+  -->
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX')) And '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">
+    <_BrewPrefix>/opt/homebrew</_BrewPrefix>
+    <!-- Override protoc with the Homebrew-installed native ARM64 binary, if present. -->
+    <Protobuf_ProtocFullPath Condition="'$(Protobuf_ProtocFullPath)' == '' And Exists('$(_BrewPrefix)/bin/protoc')">$(_BrewPrefix)/bin/protoc</Protobuf_ProtocFullPath>
+    <!-- Override the gRPC C# plugin with the Homebrew-installed native ARM64 binary, if present. -->
+    <gRPC_PluginFullPath Condition="'$(gRPC_PluginFullPath)' == '' And Exists('$(_BrewPrefix)/bin/grpc_csharp_plugin')">$(_BrewPrefix)/bin/grpc_csharp_plugin</gRPC_PluginFullPath>
+  </PropertyGroup>
+
+</Project>
