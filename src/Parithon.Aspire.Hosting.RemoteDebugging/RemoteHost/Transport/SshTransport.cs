@@ -607,6 +607,9 @@ internal sealed class SshTransport : IRemoteHostTransport
 
   public async Task<ResourceHealthCheckResult> CheckSidecarHealthAsync(ILogger logger, CancellationToken cancellationToken)
   {
+    if (Interlocked.CompareExchange(ref _disconnected, 0, 0) != 0)
+      return ResourceHealthCheckResult.Unhealthy("SSH session is disconnected.");
+
     if (_client is null || !_client.IsConnected)
       return ResourceHealthCheckResult.Unhealthy("SSH connection is not established.");
 
@@ -632,6 +635,12 @@ internal sealed class SshTransport : IRemoteHostTransport
 
   public Task<ResourceHealthCheckResult> CheckVsdbgHealthAsync(ILogger logger, CancellationToken cancellationToken)
   {
+    if (Interlocked.CompareExchange(ref _disconnected, 0, 0) != 0)
+      return Task.FromResult(ResourceHealthCheckResult.Unhealthy("SSH session is disconnected."));
+
+    if (_client is null || !_client.IsConnected)
+      return Task.FromResult(ResourceHealthCheckResult.Unhealthy("SSH connection is not established."));
+
     if (_vsdbgCommand is null || _vsdbgAsyncResult is null)
       return Task.FromResult(ResourceHealthCheckResult.Unknown("vsdbg has not been started yet."));
 
