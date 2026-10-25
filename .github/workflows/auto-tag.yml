@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   tag:
@@ -70,19 +71,35 @@ jobs:
       - name: Create and push tag
         if: steps.final.outputs.tag != ''
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag="${{ steps.final.outputs.tag }}"
           trigger_token="${{ secrets.RELEASE_TRIGGER_TOKEN }}"
+          release_dispatched="false"
 
           if [[ -z "$trigger_token" ]]; then
-            echo "RELEASE_TRIGGER_TOKEN is not configured."
-            echo "Tags pushed with GITHUB_TOKEN do not trigger the release workflow."
-            exit 1
+            echo "RELEASE_TRIGGER_TOKEN is not configured. Falling back to GITHUB_TOKEN."
+            git_remote_token="${{ github.token }}"
+          else
+            git_remote_token="$trigger_token"
           fi
 
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git remote set-url origin "https://x-access-token:${trigger_token}@github.com/${{ github.repository }}.git"
+          git remote set-url origin "https://x-access-token:${git_remote_token}@github.com/${{ github.repository }}.git"
           git tag "$tag"
           git push origin "$tag"
+
+          if [[ -z "$trigger_token" ]]; then
+            echo "Dispatching release workflow because push events from GITHUB_TOKEN do not trigger workflows."
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${{ github.repository }}/actions/workflows/release.yml/dispatches" \
+              -f ref="$tag"
+            release_dispatched="true"
+          fi
+
+          echo "Tag ${tag} created. release_dispatched=${release_dispatched}"
