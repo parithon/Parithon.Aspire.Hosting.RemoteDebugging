@@ -10,6 +10,21 @@ Thank you for your interest in contributing! This document covers how to build, 
 - [Git](https://git-scm.com/)
 - SSH access to a Windows or Linux remote host (optional, needed for integration testing)
 
+### macOS Apple Silicon (ARM64)
+
+`Grpc.Tools` only ships x86_64 binaries for macOS. On Apple Silicon, building the sidecar project requires either:
+
+- **Option A — Homebrew** (no Rosetta 2 needed):
+  ```bash
+  brew install protobuf grpc
+  ```
+  The `Directory.Build.props` at the repo root automatically redirects proto compilation to the native ARM64 binaries installed by Homebrew.
+
+- **Option B — Rosetta 2**:
+  ```bash
+  softwareupdate --install-rosetta --agree-to-license
+  ```
+
 ---
 
 ## Getting Started
