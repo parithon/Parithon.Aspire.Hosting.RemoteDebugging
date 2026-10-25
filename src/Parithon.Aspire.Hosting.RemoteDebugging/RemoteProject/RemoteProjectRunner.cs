@@ -98,6 +98,8 @@ internal static class RemoteProjectRunner
         }
       }
 
+      await ReleaseDebuggerAsync(resource, logger, cancellationToken).ConfigureAwait(false);
+
       if (ownGate)
       {
         resource.RemoteProcessId = null;
@@ -547,6 +549,34 @@ internal static class RemoteProjectRunner
     await DeployAsync(resource, logger, cancellationToken).ConfigureAwait(false);
   }
 
+  private static async Task EnsureDebuggerStartedAsync<TProject>(
+    RemoteProjectResource<TProject> resource,
+    ILogger logger,
+    CancellationToken cancellationToken) where TProject : IProjectMetadata
+  {
+    if (!resource.Parent.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var annotation)
+      || annotation?.Transport is not IRemoteHostTransport transport)
+    {
+      throw new InvalidOperationException($"Cannot ensure debugger for '{resource.Name}': no active transport.");
+    }
+
+    await transport.EnsureRemoteDebuggerStartedAsync(logger, cancellationToken).ConfigureAwait(false);
+  }
+
+  private static async Task ReleaseDebuggerAsync<TProject>(
+    RemoteProjectResource<TProject> resource,
+    ILogger logger,
+    CancellationToken cancellationToken) where TProject : IProjectMetadata
+  {
+    if (!resource.Parent.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var annotation)
+      || annotation?.Transport is not IRemoteHostTransport transport)
+    {
+      return;
+    }
+
+    await transport.ReleaseRemoteDebuggerAsync(logger, cancellationToken).ConfigureAwait(false);
+  }
+
   private static async Task StartAsync<TProject>(
     RemoteProjectResource<TProject> resource,
     ResourceNotificationService notifications,
@@ -560,7 +590,12 @@ internal static class RemoteProjectRunner
       throw new InvalidOperationException($"Cannot start '{resource.Name}': AssemblyName is not set.");
 
     if (!resource.Parent.TryGetLastAnnotation<RemoteHostTransportAnnotation>(out var annotation)
-      || annotation?.Transport.SidecarChannel is null)
+      || annotation?.Transport is not IRemoteHostTransport transport)
+      throw new InvalidOperationException($"Cannot start '{resource.Name}': no active transport.");
+
+    await EnsureDebuggerStartedAsync(resource, logger, cancellationToken).ConfigureAwait(false);
+
+    if (annotation.Transport.SidecarChannel is null)
       throw new InvalidOperationException($"Cannot start '{resource.Name}': no active sidecar channel.");
 
     var channel = annotation.Transport.SidecarChannel;
