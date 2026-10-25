@@ -1,4 +1,4 @@
-<Project Sdk="Aspire.AppHost.Sdk/13.2.4">
+<Project Sdk="Aspire.AppHost.Sdk/13.4.2">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -7,6 +7,11 @@
     <Nullable>enable</Nullable>
     <UserSecretsId>cf1f84d3-6d13-4681-b351-bd9e61dd4001</UserSecretsId>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MessagePack" Version="2.5.307" />
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="../Sample.WebApi/Sample.WebApi.csproj" />

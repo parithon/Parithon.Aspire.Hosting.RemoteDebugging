@@ -63,6 +63,18 @@ internal interface IRemoteHostTransport : IDisposable
   Task<bool> StartRemoteDebugger(ILogger logger, CancellationToken cancellationToken);
 
   /// <summary>
+  /// Ensures a remote vsdbg endpoint is started for the current project lifecycle.
+  /// Uses a ref-count so multiple resources can share the same remote debugger without tearing it down
+  /// prematurely.
+  /// </summary>
+  Task EnsureRemoteDebuggerStartedAsync(ILogger logger, CancellationToken cancellationToken);
+
+  /// <summary>
+  /// Releases one lease on the remote debugger; when the last lease is released, the remote process is stopped.
+  /// </summary>
+  Task ReleaseRemoteDebuggerAsync(ILogger logger, CancellationToken cancellationToken);
+
+  /// <summary>
   /// Checks whether the sidecar binary on the remote host is present and matches the local build
   /// timestamp (within a 2-second tolerance).
   /// </summary>

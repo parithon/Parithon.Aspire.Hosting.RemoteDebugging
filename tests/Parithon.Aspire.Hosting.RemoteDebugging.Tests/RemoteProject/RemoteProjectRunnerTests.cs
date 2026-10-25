@@ -57,6 +57,64 @@ public class RemoteProjectRunnerTests
     transport.VerifyAll();
   }
 
+  [TestMethod]
+  public async Task EnsureDebuggerStartedAsync_UsesTransportLease()
+  {
+    var appBuilder = DistributedApplication.CreateBuilder();
+    var passwordParam = appBuilder.AddParameter("password", secret: true);
+    var credential = new RemoteHostCredential("user", passwordParam);
+    var hostBuilder = appBuilder.AddRemoteHost("win-dev", OSPlatform.Windows, credential);
+    var projectBuilder = hostBuilder.AddRemoteProject<FakeProject>("remote-worker");
+
+    var transport = new Mock<IRemoteHostTransport>(MockBehavior.Strict);
+    hostBuilder.Resource.Annotations.Add(new RemoteHostTransportAnnotation(transport.Object));
+
+    transport
+      .Setup(t => t.EnsureRemoteDebuggerStartedAsync(It.IsAny<Microsoft.Extensions.Logging.ILogger>(), It.IsAny<CancellationToken>()))
+      .Returns(Task.CompletedTask);
+
+    var method = typeof(RemoteProjectRunner)
+      .GetMethod("EnsureDebuggerStartedAsync", BindingFlags.Static | BindingFlags.NonPublic)
+      ?? throw new InvalidOperationException("EnsureDebuggerStartedAsync was not found via reflection.");
+
+    var genericMethod = method.MakeGenericMethod(typeof(FakeProject));
+    var task = genericMethod.Invoke(null, [projectBuilder.Resource, NullLogger.Instance, CancellationToken.None]) as Task
+      ?? throw new InvalidOperationException("EnsureDebuggerStartedAsync did not return a Task.");
+
+    await task.ConfigureAwait(false);
+
+    transport.Verify(t => t.EnsureRemoteDebuggerStartedAsync(It.IsAny<Microsoft.Extensions.Logging.ILogger>(), It.IsAny<CancellationToken>()), Times.Once);
+  }
+
+  [TestMethod]
+  public async Task ReleaseDebuggerAsync_UsesTransportRelease()
+  {
+    var appBuilder = DistributedApplication.CreateBuilder();
+    var passwordParam = appBuilder.AddParameter("password", secret: true);
+    var credential = new RemoteHostCredential("user", passwordParam);
+    var hostBuilder = appBuilder.AddRemoteHost("win-dev", OSPlatform.Windows, credential);
+    var projectBuilder = hostBuilder.AddRemoteProject<FakeProject>("remote-worker");
+
+    var transport = new Mock<IRemoteHostTransport>(MockBehavior.Strict);
+    hostBuilder.Resource.Annotations.Add(new RemoteHostTransportAnnotation(transport.Object));
+
+    transport
+      .Setup(t => t.ReleaseRemoteDebuggerAsync(It.IsAny<Microsoft.Extensions.Logging.ILogger>(), It.IsAny<CancellationToken>()))
+      .Returns(Task.CompletedTask);
+
+    var method = typeof(RemoteProjectRunner)
+      .GetMethod("ReleaseDebuggerAsync", BindingFlags.Static | BindingFlags.NonPublic)
+      ?? throw new InvalidOperationException("ReleaseDebuggerAsync was not found via reflection.");
+
+    var genericMethod = method.MakeGenericMethod(typeof(FakeProject));
+    var task = genericMethod.Invoke(null, [projectBuilder.Resource, NullLogger.Instance, CancellationToken.None]) as Task
+      ?? throw new InvalidOperationException("ReleaseDebuggerAsync did not return a Task.");
+
+    await task.ConfigureAwait(false);
+
+    transport.Verify(t => t.ReleaseRemoteDebuggerAsync(It.IsAny<Microsoft.Extensions.Logging.ILogger>(), It.IsAny<CancellationToken>()), Times.Once);
+  }
+
   private static async Task InvokePrepareAndDeployAsync(RemoteProjectResource<FakeProject> resource)
   {
     var method = typeof(RemoteProjectRunner)

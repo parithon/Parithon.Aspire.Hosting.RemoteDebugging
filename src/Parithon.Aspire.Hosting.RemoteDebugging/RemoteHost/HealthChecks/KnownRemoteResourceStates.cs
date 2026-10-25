@@ -16,29 +16,46 @@ public static class KnownRemoteResourceStates
   public const string DeployingSidecar   = "Deploying sidecar";
   public const string StartingSidecar    = "Starting sidecar";
 
-  public static string? GetStyle(string state) => state switch
+  public static string? GetStyle(string state)
   {
-    Connecting    => KnownResourceStateStyles.Info,
-    Connected     => KnownResourceStateStyles.Success,
-    Reconnecting  => KnownResourceStateStyles.Warn,
-    Disconnecting => KnownResourceStateStyles.Info,
-    FailedToConnect => KnownResourceStateStyles.Error,
-    InstallRemoteTools => KnownResourceStateStyles.Info,
-    DeployingSidecar   => KnownResourceStateStyles.Info,
-    StartingSidecar    => KnownResourceStateStyles.Info,
-    _ => null // Disconnected
-  };
+    if (state == Connecting || state == KnownResourceStates.Starting || state == InstallRemoteTools || state == DeployingSidecar || state == StartingSidecar)
+    {
+      return KnownResourceStateStyles.Info;
+    }
 
-  public static readonly ResourceStateSnapshot DisconnectingSnapshot      = new(Disconnecting, GetStyle(Disconnecting));
-  public static readonly ResourceStateSnapshot DisconnectedSnapshot       = new(Disconnected, GetStyle(Disconnected));
-  public static readonly ResourceStateSnapshot ConnectingSnapshot         = new(Connecting, GetStyle(Connecting));
-  public static readonly ResourceStateSnapshot ConnectedSnapshot          = new(Connected, GetStyle(Connected));
+    if (state == Connected || state == KnownResourceStates.Running)
+    {
+      return KnownResourceStateStyles.Success;
+    }
+
+    if (state == Reconnecting || state == KnownResourceStates.Waiting)
+    {
+      return KnownResourceStateStyles.Warn;
+    }
+
+    if (state == Disconnecting || state == KnownResourceStates.Stopping)
+    {
+      return KnownResourceStateStyles.Info;
+    }
+
+    if (state == FailedToConnect || state == KnownResourceStates.FailedToStart)
+    {
+      return KnownResourceStateStyles.Error;
+    }
+
+    return null;
+  }
+
+  public static readonly ResourceStateSnapshot DisconnectingSnapshot      = new(KnownResourceStates.Stopping, GetStyle(KnownResourceStates.Stopping));
+  public static readonly ResourceStateSnapshot DisconnectedSnapshot       = new(KnownResourceStates.NotStarted, GetStyle(KnownResourceStates.NotStarted));
+  public static readonly ResourceStateSnapshot ConnectingSnapshot         = new(KnownResourceStates.Starting, GetStyle(KnownResourceStates.Starting));
+  public static readonly ResourceStateSnapshot ConnectedSnapshot          = new(KnownResourceStates.Running, GetStyle(KnownResourceStates.Running));
   public static readonly ResourceStateSnapshot RunningSnapshot            = new(KnownResourceStates.Running, KnownResourceStateStyles.Success);
-  public static readonly ResourceStateSnapshot ReconnectingSnapshot       = new(Reconnecting, GetStyle(Reconnecting));
-  public static readonly ResourceStateSnapshot FailedToConnectSnapshot    = new(FailedToConnect, GetStyle(FailedToConnect));
+  public static readonly ResourceStateSnapshot ReconnectingSnapshot       = new(KnownResourceStates.Waiting, GetStyle(KnownResourceStates.Waiting));
+  public static readonly ResourceStateSnapshot FailedToConnectSnapshot    = new(KnownResourceStates.FailedToStart, GetStyle(KnownResourceStates.FailedToStart));
   public static readonly ResourceStateSnapshot ExitedSnapshot             = new(KnownResourceStates.Exited, null);
-  public static readonly ResourceStateSnapshot InstallingToolsSnapshot    = new(InstallRemoteTools, GetStyle(InstallRemoteTools));
-  public static readonly ResourceStateSnapshot DeployingSidecarSnapshot   = new(DeployingSidecar, GetStyle(DeployingSidecar));
-  public static readonly ResourceStateSnapshot StartingSidecarSnapshot    = new(StartingSidecar, GetStyle(StartingSidecar));
-  public static readonly ResourceStateSnapshot FailedToInitializeSnapshot = new("Failed initialization", KnownResourceStateStyles.Error);
+  public static readonly ResourceStateSnapshot InstallingToolsSnapshot    = new(KnownResourceStates.Starting, GetStyle(KnownResourceStates.Starting));
+  public static readonly ResourceStateSnapshot DeployingSidecarSnapshot   = new(KnownResourceStates.Starting, GetStyle(KnownResourceStates.Starting));
+  public static readonly ResourceStateSnapshot StartingSidecarSnapshot    = new(KnownResourceStates.Starting, GetStyle(KnownResourceStates.Starting));
+  public static readonly ResourceStateSnapshot FailedToInitializeSnapshot = new(KnownResourceStates.FailedToStart, KnownResourceStateStyles.Error);
 }

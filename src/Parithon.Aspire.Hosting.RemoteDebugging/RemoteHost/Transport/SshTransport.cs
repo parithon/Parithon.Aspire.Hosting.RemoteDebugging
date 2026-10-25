@@ -32,6 +32,9 @@ internal sealed class SshTransport : IRemoteHostTransport
   private SshCommand? _vsdbgCommand;
   private IAsyncResult? _vsdbgAsyncResult;
   private DateTime _vsdbgStartTime;
+  private readonly SemaphoreSlim _remoteDebuggerLeaseGate = new(1, 1);
+  private int _remoteDebuggerLeaseCount;
+  private int _remoteDebuggerStopRequested;
 
   private ForwardedPortLocal? _sidecarPortForward;
   private ForwardedPortRemote? _otelPortForward;
@@ -54,6 +57,8 @@ internal sealed class SshTransport : IRemoteHostTransport
     Interlocked.Exchange(ref _disconnected, 0);
 
     _resource = resource;
+    Interlocked.Exchange(ref _remoteDebuggerLeaseCount, 0);
+    Interlocked.Exchange(ref _remoteDebuggerStopRequested, 0);
 
     var dns = resource.DnsParameter is not null
       ? await resource.DnsParameter.Resource.GetValueAsync(cancellationToken).ConfigureAwait(false)
@@ -383,14 +388,92 @@ internal sealed class SshTransport : IRemoteHostTransport
         // CompareExchange: if _disconnected is still 0, set it to 0 and get 0 back — fire event.
         // We do NOT set _disconnected=1 here; that is only set for connection-level termination.
         // We use a simple read so a vsdbg restart keeps _disconnected=0 for future exits.
-        if (Interlocked.CompareExchange(ref _disconnected, 0, 0) == 0)
+        if (Interlocked.CompareExchange(ref _disconnected, 0, 0) == 0
+          && Interlocked.CompareExchange(ref _remoteDebuggerStopRequested, 0, 0) == 0)
+        {
           RemoteDebuggerExited?.Invoke(this, EventArgs.Empty);
+        }
       }, null);
 
       return true;
     }
 
     return false;
+  }
+
+  public async Task EnsureRemoteDebuggerStartedAsync(ILogger logger, CancellationToken cancellationToken)
+  {
+    if (_client is null)
+      throw new InvalidOperationException("The SSH client is null.");
+    if (_resource is null)
+      throw new InvalidOperationException("The remote host resource is null.");
+
+    await _remoteDebuggerLeaseGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+    try
+    {
+      var currentCount = Interlocked.Increment(ref _remoteDebuggerLeaseCount);
+      if (currentCount == 1 || _vsdbgCommand is null || _vsdbgAsyncResult is null || _vsdbgAsyncResult.IsCompleted)
+      {
+        var installResult = await InstallRemoteDebugger(logger, cancellationToken).ConfigureAwait(false);
+        if (!installResult.IsInstalled)
+        {
+          Interlocked.Decrement(ref _remoteDebuggerLeaseCount);
+          throw installResult.Exception ?? new InvalidOperationException("Failed to install the remote debugger.");
+        }
+
+        var started = await StartRemoteDebugger(logger, cancellationToken).ConfigureAwait(false);
+        if (!started)
+        {
+          Interlocked.Decrement(ref _remoteDebuggerLeaseCount);
+          throw new InvalidOperationException("Failed to start the remote debugger.");
+        }
+      }
+    }
+    finally
+    {
+      _remoteDebuggerLeaseGate.Release();
+    }
+  }
+
+  public async Task ReleaseRemoteDebuggerAsync(ILogger logger, CancellationToken cancellationToken)
+  {
+    if (_client is null || _resource is null)
+      return;
+
+    await _remoteDebuggerLeaseGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+    try
+    {
+      if (_remoteDebuggerLeaseCount <= 0)
+        return;
+
+      if (Interlocked.Decrement(ref _remoteDebuggerLeaseCount) == 0)
+      {
+        if (_resource.TryGetLastAnnotation<RemoteHostOSPlatformAnnotation>(out var platformAnnotation) && platformAnnotation is not null)
+        {
+          logger.LogInformation("Stopping remote debugger for {Host}.", _resource.Name);
+          Interlocked.Exchange(ref _remoteDebuggerStopRequested, 1);
+          try
+          {
+            var command = platformAnnotation.Platform == OSPlatform.Windows
+              ? "taskkill /F /IM vsdbg.exe 2>nul & exit /B 0"
+              : "pkill -f 'vsdbg --interpreter=vscode' 2>/dev/null || true";
+
+            using var cmd = _client.CreateCommand(command);
+            await Task.Factory.FromAsync(cmd.BeginExecute(), cmd.EndExecute).ConfigureAwait(false);
+          }
+          finally
+          {
+            _vsdbgCommand = null;
+            _vsdbgAsyncResult = null;
+            Interlocked.Exchange(ref _remoteDebuggerStopRequested, 0);
+          }
+        }
+      }
+    }
+    finally
+    {
+      _remoteDebuggerLeaseGate.Release();
+    }
   }
 
   public Task<SidecarDeploymentStatus> SidecarDeployedAsync(RemoteHostResource resource, CancellationToken cancellationToken)
@@ -607,6 +690,9 @@ internal sealed class SshTransport : IRemoteHostTransport
 
   public async Task<ResourceHealthCheckResult> CheckSidecarHealthAsync(ILogger logger, CancellationToken cancellationToken)
   {
+    if (Interlocked.CompareExchange(ref _disconnected, 0, 0) != 0)
+      return ResourceHealthCheckResult.Unhealthy("SSH session is disconnected.");
+
     if (_client is null || !_client.IsConnected)
       return ResourceHealthCheckResult.Unhealthy("SSH connection is not established.");
 
@@ -632,6 +718,12 @@ internal sealed class SshTransport : IRemoteHostTransport
 
   public Task<ResourceHealthCheckResult> CheckVsdbgHealthAsync(ILogger logger, CancellationToken cancellationToken)
   {
+    if (Interlocked.CompareExchange(ref _disconnected, 0, 0) != 0)
+      return Task.FromResult(ResourceHealthCheckResult.Unhealthy("SSH session is disconnected."));
+
+    if (_client is null || !_client.IsConnected)
+      return Task.FromResult(ResourceHealthCheckResult.Unhealthy("SSH connection is not established."));
+
     if (_vsdbgCommand is null || _vsdbgAsyncResult is null)
       return Task.FromResult(ResourceHealthCheckResult.Unknown("vsdbg has not been started yet."));
 

@@ -8,7 +8,7 @@ var windev_passwd = builder.AddParameter("win-dev-password", secret: true);
 var webapi = builder.AddProject<Sample_WebApi>("webapi");
 
 var windev = builder.AddRemoteHost("win-dev", OSPlatform.Windows, new("loadmin", windev_passwd))
-  .WithEndpoint("10.47.255.250", 22);
+  .WithEndpoint("10.47.255.243", 22);
 
 windev.AddRemoteProject<Sample_WorkerApp>("remote-worker")
   .WithReference(webapi)

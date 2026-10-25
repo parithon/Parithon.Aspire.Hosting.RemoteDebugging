@@ -34,7 +34,7 @@ internal sealed class RemoteProjectEventingSubscriber<TProject>(ResourceNotifica
               if (state == previousParentState) continue;
               previousParentState = state;
 
-              if (state == KnownRemoteResourceStates.Connected)
+              if (state == KnownResourceStates.Running)
               {
                 var runToken = resource.CreateRunToken(ct);
                 _ = Task.Run(async () =>
@@ -51,11 +51,11 @@ internal sealed class RemoteProjectEventingSubscriber<TProject>(ResourceNotifica
                   }
                 }, CancellationToken.None);
               }
-              else if (state is KnownRemoteResourceStates.Reconnecting
-                             or KnownRemoteResourceStates.Disconnecting
-                             or KnownRemoteResourceStates.Disconnected
-                             or KnownRemoteResourceStates.FailedToConnect
-                             or KnownRemoteResourceStates.FailedToInitialize)
+              else if (state == KnownResourceStates.Waiting
+                             || state == KnownResourceStates.Stopping
+                             || state == KnownResourceStates.NotStarted
+                             || state == KnownResourceStates.FailedToStart
+                             || state == KnownResourceStates.Exited)
               {
                 resource.CancelRun();
                 await notifications.PublishUpdateAsync(resource, s => s with

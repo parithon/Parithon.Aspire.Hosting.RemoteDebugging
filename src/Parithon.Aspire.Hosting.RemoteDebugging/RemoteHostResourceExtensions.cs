@@ -123,7 +123,7 @@ public static class RemoteHostResourceExtensions
         UpdateState = ctx =>
         {
           var state = ctx.ResourceSnapshot.State?.Text;
-          return state == KnownRemoteResourceStates.Connecting || state == KnownRemoteResourceStates.Connected
+          return state == KnownResourceStates.Starting || state == KnownResourceStates.Running
             ? ResourceCommandState.Disabled
             : ResourceCommandState.Enabled;
         },
@@ -142,7 +142,7 @@ public static class RemoteHostResourceExtensions
         UpdateState = ctx =>
         {
           var state = ctx.ResourceSnapshot.State?.Text;
-          return state == KnownRemoteResourceStates.Connected
+          return state == KnownResourceStates.Running
             ? ResourceCommandState.Enabled
             : ResourceCommandState.Disabled;
         },
